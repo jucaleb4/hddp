@@ -108,6 +108,9 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             max_val
         )
 
+    if is_host and (params["mode"] == SDDP_MODE or params["mode"] == ESDDP_MODE):
+        params["rng"] = np.random.default_rng(params.get("sel_seed", None))
+
     while 1:
         s_time = time.time()
 
@@ -286,7 +289,7 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
         ignore_zeroth_scenario = (mode == EDDP_ONLY_LB_MODE)
         [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x[ignore_zeroth_scenario:])
     elif mode == ESDDP_MODE or mode == SDDP_MODE:
-        i_rand = np.random.randint(1, params["N"]+1)
+        i_rand = params["rng"].random.randint(1, params["N"]+1)
         x = agg_x[i_rand]
         sat_lvl = S.get(x)
     else:

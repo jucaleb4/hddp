@@ -143,10 +143,6 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
         'M_0': 500, 
         'fwd_T': 0, 
         'max_iter': niters,
-        # 'mode': SDDP_MODE,
-        # 'mode': ESDDP_MODE,
-        # 'mode': EDDP_ONLY_LB_MODE_LINEAR,
-        # 'mode': EDDP_UB_AND_LB_MODE,
         'mode': mode,
         'eps_lvls': eps_lvls,
         'evaluate_lb': True,
@@ -172,101 +168,6 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
     print("x_0:", x_0)
     # print("F(x^*):", opt)
     print("Solution of x={} with value F(x)={}".format(x, val))
-
-def _main():
-    np.random.seed(1)
-    N = 1
-    nprocs = 1
-
-    prob_id = 0
-
-    solvers = [None]*nprocs
-    for i in range(nprocs):
-        if prob_id == 0:
-            print("hydro")
-            discount = 0.9906
-            solver, x_0 = opt_setup_hydro_basic(N, discount)
-            params = {
-                'L' : 0*np.zeros(len(x_0)),
-                # 'R' : 201000*np.ones(len(x_0)),
-                'R' : 100000*np.ones(len(x_0)),
-                'T' : 120,
-                'N' : N,
-                'n' : len(x_0),
-                'eps': 10000,
-                'lam': discount,
-                'fwd_T': 0, 
-                'max_iter': -1,
-                'sddp_mode': False,
-            }
-            opt = 0
-
-        elif prob_id == 1:
-            # TODO: Changed demand and discount
-            print("inventory")
-            discount = 0.8
-            solver, x_0, avg = opt_setup_inventory_basic(N, discount)
-            params = {
-                'L' : -11,
-                'R' : 11,
-                'T' : 100,
-                'N' : N,
-                'n' : len(x_0),
-                'eps': 1,
-                'lam': discount,
-                'fwd_T': 10,
-                'max_iter': 100,
-                'sddp_mode': False
-            }
-            opt = (4.5*0.2) + discount*((avg-4.5)*2) + discount**2/(1-discount)*avg*2
-
-        elif prob_id == 2:
-            print("pathological")
-            discount = 1.0-1e-5
-            solver, x_0 = opt_setup_simple(N, discount)
-            params = {
-                'L' : 0,
-                'R' : 3,
-                'T' : 1000,
-                'N' : N,
-                'n' : len(x_0),
-                'eps': 1,
-                'lam': discount,
-                'fwd_T': 1,
-                'max_iter': -1,
-                'sddp_mode': False
-            }
-            opt = 0
-
-        elif prob_id == 3:
-            print("hydro homo")
-            discount = 0.9
-            solver, x_0 = opt_setup_hydro_homo(N, discount)
-            params = {
-                'L' : np.zeros(len(x_0)),
-                'R' : 100000*np.ones(len(x_0)),
-                'T' : 100,
-                'N' : N,
-                'n' : len(x_0),
-                'eps': 25000,
-                'lam': discount,
-                'fwd_T': 0, 
-                'max_iter': -1,
-                'sddp_mode': False,
-            }
-            opt = 0
-        else: 
-            print("undefined problem...")
-            return 
-
-        solvers[i] = solver
-
-    # x, val = HDDP(x_0, eps, params, solver)
-    x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
-
-    print("x_0:", x_0)
-    print("F(x^*):", opt)
-    print("Solution of x={} with value {}".format(x, val))
 
 if __name__ == '__main__':
 
