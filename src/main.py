@@ -41,7 +41,7 @@ def opt_setup_simple(N, lam):
     x_0 = 1.5*np.ones(n)
     return solver, x_0
 
-def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
+def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     lam = 0.95
     n = 10
     T = 60
@@ -71,11 +71,8 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, lowerr, select_s
         'M_0': 500, 
         'fwd_T': 0, 
         'max_iter': niters,
-        # 'mode': SDDP_MODE,
-        # 'mode': ESDDP_MODE,
-        # 'mode': EDDP_ONLY_LB_MODE_LINEAR,
-        # 'mode': EDDP_UB_AND_LB_MODE,
         'mode': mode,
+        'perturb': perturb,
         'eps_lvls': eps_lvls,
         'evaluate_lb': True,
         'evaluate_ub': True,
@@ -85,7 +82,7 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, lowerr, select_s
     solvers = [None]*nprocs
     for i in range(nprocs):
         np.random.seed(scen_seed + i)
-        solver, x_0 = opt_setup.opt_electricity_price_setup(N, lam, lowerr)
+        solver, x_0 = opt_setup.opt_electricity_price_setup(N, lam)
         if n != len(x_0):
             print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
             exit(0)
@@ -100,7 +97,7 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, lowerr, select_s
     # print("F(x^*):", opt)
     print("Solution of x={} with value F(x)={}".format(x, val))
 
-def run_hydro_basic(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
+def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     """
     Runs SDDP on hydro problem 
     
@@ -110,6 +107,7 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
         nprocs (int): number of processes to run in parallel
         mode (int): mode of SDDP (SDDP_MODE, ESDDP_MODE, EDDP_ONLY_LB_MODE, EDDP_UB_AND_LB_MODE
         niters (int): number of iterations to run SDDP for
+        perturb (bool): whether to perturb the solutions
         select_seed (int): seed for scenario selection
     """
     N = 10
@@ -144,6 +142,7 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, lowerr, select_seed=0):
         'fwd_T': 0, 
         'max_iter': niters,
         'mode': mode,
+        'perturb': perturb,
         'eps_lvls': eps_lvls,
         'evaluate_lb': True,
         'evaluate_ub': True,
@@ -191,13 +190,13 @@ if __name__ == '__main__':
     parser.add_argument("--nprocs", type=positive_type,    help="Number of processors", default=1)
     parser.add_argument("--mode",   type=nonnegative_type, help="SDDP mode (see header hddp.py)", default=0)
     parser.add_argument("--niters", type=positive_type,    help="Max numner of iterations", default=1000)
-    parser.add_argument("--bigerr", action="store_true", help="Lowest error (default false)", default=False)
+    parser.add_argument("--perturb", action="store_true", help="Perturb solution (with sig=0.1)", default=False)
 
     args = parser.parse_args()
 
     if args.prob == 1:
-        run_hydro_basic(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.bigerr, args.sel_seed)
+        run_hydro_basic(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 2:
-        run_electricity_pricing(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.bigerr, args.sel_seed)
+        run_electricity_pricing(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     else:
         print("invalid problem id {}".format(args.prob))

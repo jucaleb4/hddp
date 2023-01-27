@@ -139,10 +139,15 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             )
             [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
 
-            if False:
+            if params.get("perturb", False):
                 val += np.random.normal(0, 0.1)
-                grad += np.random.normal(0, 0.01, n)
-                x_next += np.random.normal(0, 0.01, n)
+                grad += np.random.normal(0, 0.1, n)
+                x_next += np.random.normal(0, 0.1, n)
+
+            # TEMP (sanity check to ensure LP returning something reasonable)
+            if np.sum(np.abs(grad)) <= 0:
+                print("[!!] grad is zero, grad={}".format(grad))
+
             [last_x, last_val] = [x_next, val]
         elif not is_host:
             outmail = [agg_x, agg_val, agg_grad]
@@ -289,7 +294,7 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
         ignore_zeroth_scenario = (mode == EDDP_ONLY_LB_MODE)
         [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x[ignore_zeroth_scenario:])
     elif mode == ESDDP_MODE or mode == SDDP_MODE:
-        i_rand = params["rng"].random.randint(1, params["N"]+1)
+        i_rand = params["rng"].integers(1, params["N"], endpoint=True)
         x = agg_x[i_rand]
         sat_lvl = S.get(x)
     else:
