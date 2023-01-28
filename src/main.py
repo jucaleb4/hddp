@@ -114,7 +114,7 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     lam = 0.9906
     nprocs = 1
     n = 4
-    T = 12
+    T = 120
     eps = 10000
 
     M_h = 25
