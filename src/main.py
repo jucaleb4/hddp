@@ -144,8 +144,8 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
         'mode': mode,
         'perturb': perturb,
         'eps_lvls': eps_lvls,
-        'evaluate_lb': True,
-        'evaluate_ub': True,
+        'evaluate_lb': False,
+        'evaluate_ub': False,
     }
 
     # Create multiple solvers for each proc

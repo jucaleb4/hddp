@@ -140,6 +140,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
 
             if params.get("perturb", False):
+                print(">> perturbing")
                 val += np.random.normal(0, 0.1)
                 grad += np.random.normal(0, 0.1, n)
                 x_next += np.random.normal(0, 0.1, n)
