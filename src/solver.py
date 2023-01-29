@@ -419,7 +419,6 @@ class GurobiSolver:
             grad (np.array): gradient of solution
             ctg (float): cost-to-go
         """
-
         # Setup past state variable
         for i in range(self.n):
             self.md.setAttr("RHS", 
@@ -446,9 +445,9 @@ class GurobiSolver:
         y_sol_dummy = np.array([self.md.getAttr("Pi", 
             [self.md.getConstrByName("dummy[{}]".format(i))]) 
             for i in range(self.n)])
-        y_sol_rand = np.array([self.md.getAttr("Pi", 
-            [self.md.getConstrByName("rand[{}]".format(i))]) 
-            for i in range(len(self.scenarios[ver]))])
+        # y_sol_rand = np.array([self.md.getAttr("Pi", 
+        #     [self.md.getConstrByName("rand[{}]".format(i))]) 
+        #     for i in range(len(self.scenarios[ver]))])
         y_sol = y_sol_dummy
         # y_sol = y_sol_rand
         # y_sol = np.zeros(len(y_sol_dummy))
@@ -534,11 +533,12 @@ class SaturatedSet:
         idx = ','.join(idx_arr.astype('str'))
         self.S[idx] = lvl
 
-    def largest_sat_lvl(self, agg_x):
+    def largest_sat_lvl(self, agg_x, rng, prioritize_zero):
         """ Gets highest saturation lvl (and index) 
         
         Args:
             agg_x (np.array): aggregate points
+            prioritize_zero (bool): select 0 if it is argmin
         
         Returns:
             dist_x (np.array): point with highest saturation level
@@ -547,10 +547,10 @@ class SaturatedSet:
         """
         sat_lvls = np.array([self.get(agg_x[i]) for i in range(len(agg_x))])
         # randomize over ties (proritize x_0)
-        if self.get(agg_x[0]) == np.max(sat_lvls):
+        if prioritize_zero and self.get(agg_x[0]) == np.max(sat_lvls):
             argmax_idx = 0
         else:
-            argmax_idx = np.random.choice(np.flatnonzero(sat_lvls == np.max(sat_lvls)))
+            argmax_idx = rng.choice(np.flatnonzero(sat_lvls == np.max(sat_lvls)))
         # argmax_idx = np.argmax(sat_lvls)
         dist_x = agg_x[argmax_idx]
         return dist_x, sat_lvls[argmax_idx], argmax_idx

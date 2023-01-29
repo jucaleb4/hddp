@@ -41,6 +41,116 @@ def opt_setup_simple(N, lam):
     x_0 = 1.5*np.ones(n)
     return solver, x_0
 
+def run_inventory(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
+    lam = 0.8
+    n = 1
+    T = 50
+    eps = 1
+
+    M_h = 25
+    M = 25
+    uM = 10000
+    D = 100000
+    eps_lvls = np.zeros(T)
+    eps_lvls[T-1] = M_h*D/(1-lam)
+    _eps = 0.01
+    for t in range(T-2,-1,-1):
+        eps_lvls[t] = lam**(T-t-1) * eps_lvls[T-1]
+        for tau in range(t, T-1):
+            eps_lvls[t] += (M + uM)*_eps*lam**(tau-t)
+
+    params = {
+        'L' : -100*np.ones(n),
+        # 'R' : 201000*np.ones(len(x_0)),
+        'R' : 100*np.ones(n),
+        'T' : T,
+        'N' : N,
+        'n' : n,
+        'eps': eps,
+        'lam': lam,
+        'M_0': 500, 
+        'fwd_T': 0, 
+        'max_iter': niters,
+        'mode': mode,
+        'perturb': perturb,
+        'eps_lvls': eps_lvls,
+        'evaluate_lb': False,
+        'evaluate_ub': True,
+        'sel_seed': select_seed,
+    }
+
+    # Create multiple solvers for each proc
+    rng = np.random.default_rng(scen_seed)
+    solvers = [None]*nprocs
+    for i in range(nprocs):
+        solver, x_0 = opt_setup.opt_setup_inventory_basic(N, lam, rng)
+        if n != len(x_0):
+            print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
+            exit(0)
+        solvers[i] = solver
+
+    # x, val = HDDP(x_0, eps, params, solver)
+    x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
+
+    print("x_0:", x_0)
+    print("Solution of x={} with value F(x)={}".format(x, val))
+
+def run_simple(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
+    """
+    Simple geometric summation problem
+    """
+    lam = 0.9
+    n = 10
+    T = 50
+    eps = 1
+
+    M_h = 25
+    M = 25
+    uM = 10000
+    D = 100000
+    eps_lvls = np.zeros(T)
+    eps_lvls[T-1] = M_h*D/(1-lam)
+    _eps = 0.01
+    for t in range(T-2,-1,-1):
+        eps_lvls[t] = lam**(T-t-1) * eps_lvls[T-1]
+        for tau in range(t, T-1):
+            eps_lvls[t] += (M + uM)*_eps*lam**(tau-t)
+
+    params = {
+        'L' : 0*np.zeros(n),
+        # 'R' : 201000*np.ones(len(x_0)),
+        'R' : n*np.ones(n),
+        'T' : T,
+        'N' : N,
+        'n' : n,
+        'eps': eps,
+        'lam': lam,
+        'M_0': 500, 
+        'fwd_T': 0, 
+        'max_iter': niters,
+        'mode': mode,
+        'perturb': perturb,
+        'eps_lvls': eps_lvls,
+        'evaluate_lb': False,
+        'evaluate_ub': True,
+        'sel_seed': select_seed,
+    }
+
+    # Create multiple solvers for each proc
+    solvers = [None]*nprocs
+    for i in range(nprocs):
+        solver, x_0 = opt_setup.opt_simple(N, lam)
+        if n != len(x_0):
+            print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
+            exit(0)
+        solvers[i] = solver
+
+    # x, val = HDDP(x_0, eps, params, solver)
+    x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
+
+    print("x_0:", x_0)
+    print("Solution of x={} with value F(x)={}".format(x, val))
+
 def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     lam = 0.95
     n = 10
@@ -74,21 +184,21 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_
         'mode': mode,
         'perturb': perturb,
         'eps_lvls': eps_lvls,
-        'evaluate_lb': True,
+        'evaluate_lb': False,
         'evaluate_ub': True,
+        'sel_seed': select_seed,
     }
 
     # Create multiple solvers for each proc
     solvers = [None]*nprocs
+    rng = np.random.default_rng(scen_seed)
     for i in range(nprocs):
-        np.random.seed(scen_seed + i)
-        solver, x_0 = opt_setup.opt_electricity_price_setup(N, lam)
+        # np.random.seed(scen_seed + i)
+        solver, x_0 = opt_setup.opt_electricity_price_setup(N, lam, rng)
         if n != len(x_0):
             print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
             exit(0)
         solvers[i] = solver
-
-    np.random.seed(select_seed)
 
     # x, val = HDDP(x_0, eps, params, solver)
     x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
@@ -114,7 +224,7 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     lam = 0.9906
     nprocs = 1
     n = 4
-    T = 120
+    T = 12
     eps = 10000
 
     M_h = 25
@@ -144,13 +254,13 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
         'mode': mode,
         'perturb': perturb,
         'eps_lvls': eps_lvls,
-        'evaluate_lb': False,
-        'evaluate_ub': False,
+        'evaluate_lb': True,
+        'evaluate_ub': True,
+        'sel_seed': select_seed,
     }
 
     # Create multiple solvers for each proc
     solvers = [None]*nprocs
-    # np.random.seed(scen_seed)
     rng = np.random.default_rng(scen_seed)
     for i in range(nprocs):
         solver, x_0 = opt_setup.opt_setup_hydro_basic(N, lam, rng)
@@ -158,8 +268,6 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
             print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
             exit(0)
         solvers[i] = solver
-
-    np.random.seed(select_seed)
 
     # x, val = HDDP(x_0, eps, params, solver)
     x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
@@ -193,10 +301,15 @@ if __name__ == '__main__':
     parser.add_argument("--perturb", action="store_true", help="Perturb solution (with sig=0.1)", default=False)
 
     args = parser.parse_args()
+    print("Args:\n", args, "\n")
 
     if args.prob == 1:
         run_hydro_basic(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 2:
         run_electricity_pricing(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
+    elif args.prob == 3:
+        run_simple(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
+    elif args.prob == 4:
+        run_inventory(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     else:
         print("invalid problem id {}".format(args.prob))

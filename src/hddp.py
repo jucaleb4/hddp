@@ -108,7 +108,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             max_val
         )
 
-    if is_host and (params["mode"] == SDDP_MODE or params["mode"] == ESDDP_MODE):
+    if is_host:
         params["rng"] = np.random.default_rng(params.get("sel_seed", None))
 
     while 1:
@@ -135,7 +135,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                 S, 
                 lb_model, 
                 ub_model, 
-                params
+                params,
             )
             [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
 
@@ -289,13 +289,15 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
         update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, eps_lvls)
 
     # select the subproblem
-    if mode == EDDP_ONLY_LB_MODE or \
-        mode == EDDP_ONLY_LB_MODE_LINEAR or \
-        mode == EDDP_UB_AND_LB_MODE:
-        ignore_zeroth_scenario = (mode == EDDP_ONLY_LB_MODE)
-        [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x[ignore_zeroth_scenario:])
+    if mode == EDDP_ONLY_LB_MODE_LINEAR or mode == EDDP_UB_AND_LB_MODE:
+        [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x, params["rng"], prioritize_zero=False)
+    elif mode == EDDP_ONLY_LB_MODE:
+        [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x[:], params["rng"], prioritize_zero=False)
+        # [x, sat_lvl, idx] = S.largest_sat_lvl(agg_x[1:], params["rng"], prioritize_zero=False)
+        idx += 1
     elif mode == ESDDP_MODE or mode == SDDP_MODE:
-        i_rand = params["rng"].integers(1, params["N"], endpoint=True)
+        i_rand = params["rng"].integers(0, params["N"], endpoint=True)
+        # i_rand = params["rng"].integers(1, params["N"], endpoint=True)
         x = agg_x[i_rand]
         sat_lvl = S.get(x)
         idx = i_rand
@@ -317,10 +319,9 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
     for _ in range(nprocs-1):
         q_child.put(outmail) 
 
-    # TEMP
-    # print(">> idx={} val={} grad={}".format(idx + ignore_zeroth_scenario, avg_val, avg_grad))
-    print(">> idx={}".format(idx))
     return [x, val, grad, avg_val, avg_grad, sat_lvl]
+
+    # [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
 
 def initiate_workers(x_0, params, solvers, nprocs):
     q_host = Queue() # JoinableQueue()

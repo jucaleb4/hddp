@@ -45,7 +45,7 @@ def opt_rareflow(N, lam):
     x_0 = np.array([0])
     return solver, x_0
 
-def opt_setup_inventory_basic(N, lam):
+def opt_setup_inventory_basic(N, lam, rng):
     """ Setups basic inventory problem
 
     State (dim=1) is the amount of inventory
@@ -70,14 +70,16 @@ def opt_setup_inventory_basic(N, lam):
 
     # define gurobi model
     m = gp.Model()
-    now = m.addMVar(1, lb=-1000)
+    now = m.addMVar(1, lb=-1000, name="now")
+    now_var_name_arr = ["now[0]"]
+    past_state_for_min_val = np.array([10])
+    past_state_for_max_val = np.array([-1000])
+
     past = m.addMVar(1, lb=-1000)
     # control variables
     u = m.addMVar(1, lb=0) # quantity we order
     v = m.addMVar(1, lb=0) # over-supply
     w = m.addMVar(1, lb=0) # under-supply
-    # cost-to-go
-    t = m.addMVar(1, lb=0)
 
     rand_constrs = [None] * 3
     rand_constrs[0] = m.addConstr(-now + (past + u) == 0, name='rand[0]') # .values()
@@ -85,19 +87,59 @@ def opt_setup_inventory_basic(N, lam):
     rand_constrs[2] = m.addConstr(-w + (past + u) <= 0, name='rand[2]') # .values()
     dummy_constrs = m.addConstr(np.eye(1)@past == np.zeros(1), name="dummy[0]") # .values()
 
-    m.setObjective(c*u + b*v + h*w + lam*t, gp.GRB.MINIMIZE)
+    m.setObjective(c*u + b*v + h*w, gp.GRB.MINIMIZE)
 
-    np.random.seed(1)
-    scenarios = np.append([5.5], d*np.ones(N) + phi*np.random.uniform(size=N))
+    scenarios = np.append([5.5], d*np.ones(N) + phi*rng.random(N))
     avg = np.mean(scenarios[1:])
     # scenarios = np.append([5.5], d*np.ones(N) + phi*0.5)
     scenarios = np.reshape(np.repeat(scenarios, 3), newshape=(-1,3))
-    solver = GurobiSolver(m, now, t, scenarios)
+    solver = GurobiSolver(
+        m, 
+        now, 
+        now_var_name_arr,
+        lam, 
+        scenarios,
+        past_state_for_min_val=past_state_for_min_val,
+        past_state_for_max_val=past_state_for_max_val,
+    )
 
     x_0 = np.array([10])
-    return solver, x_0, avg
 
-def opt_electricity_price_setup(N, lam):
+    return solver, x_0
+
+def opt_simple(N, lam):
+    """
+    Simple optimiztion problem we want to make sure lb == ub.
+    """
+    m = gp.Model()
+    n = 10
+
+    now_var_name = "now"
+    now = m.addMVar(n, lb=-100, name=now_var_name)
+    now_var_name_arr = np.array(["{}[{}]".format(now_var_name, i) for i in range(n)])
+    past = m.addMVar(n, lb=-100, name="past")
+    past_state_for_min_val = np.zeros(n)
+    past_state_for_max_val = n*np.ones(n)
+
+    m.addConstr(now - past == np.zeros(n), name="rand")
+    m.addConstr(past == np.zeros(n), name="dummy")
+    m.setObjective(np.ones(n)@now, gp.GRB.MINIMIZE)
+    scenarios = -0*np.ones((N+1)*n)
+    scenarios = np.reshape(scenarios, (N+1, n))
+    solver = GurobiSolver(
+        m, 
+        now, 
+        now_var_name_arr,
+        lam, 
+        scenarios,
+        past_state_for_min_val=past_state_for_min_val,
+        past_state_for_max_val=past_state_for_max_val,
+    )
+
+    x_0 = np.arange(1,n+1)
+    return solver, x_0
+
+def opt_electricity_price_setup(N, lam, rng):
     """
     Sets up basic 2 stage electricity price model.
 
@@ -112,20 +154,21 @@ def opt_electricity_price_setup(N, lam):
     # Define constants
     c = 25 * np.ones(R)
     # TODO: set appropriate ranges
-    thermal_ub = 500 + 200*np.random.random(R)
-    battery_ub = 50 * 10*np.random.random(D)
-    battery_degredation = 0.8 + 0.2*np.random.random()
+    thermal_ub = 500 + 200*rng.random(R)
+    battery_ub = 50 * 10*rng.random(D)
+    battery_degredation = 0.8 + 0.2*rng.random()
 
     scenarios = np.zeros((N+1, D))
-    scenarios[0] = 50 + 150*np.random.sample(D)
-    scenarios[1] = 100 + 100*np.random.sample(D)
+    scenarios[0] = 50 + 150*rng.random(D)
+    scenarios[1] = 75 + 125*rng.random(D)
     for i in range(1,N):
-        scenarios[i+1] = np.random.triangular(100, 180, 200, D)
+        scenarios[i+1] = (125 - i/50) + (200 - 125 + i/50)*rng.random(D)
+    print(">> scenarios: \n{}\n".format(scenarios))
 
-    harvest_demand = 150 + 50 * np.random.sample(N)
+    harvest_demand = 150 + 50 * rng.random(N)
     # do we want to make this random for each scenario?
-    harvest_limit = (200/D) + (150/D) * np.random.random(D)
-    transport_degredation = 0.7 + 0.3 * np.random.random(D)
+    harvest_limit = (200/D) + (150/D) * rng.random(D)
+    transport_degredation = 0.7 + 0.3 * rng.random(D)
 
     m = gp.Model("electrictiy prices")
 
@@ -143,6 +186,7 @@ def opt_electricity_price_setup(N, lam):
     alloc_1_arr = []
     alloc_not_1_arr = []
     for i in range(N):
+        # how much to allocate to region 1
         alloc_1 = m.addMVar(D, lb=0, name="alloc_in_region_1")
         alloc_not_1 = m.addMVar(D-1, lb=0, name="alloc_not_in_region_1")
         alloc_1_arr.append(alloc_1)
@@ -197,7 +241,7 @@ def opt_setup_hydro_basic(N, lam, rng):
     Args:
         N (int): number of scenarios
         lam (float): discount factor of cost-to-go
-        rng (np.random..Generator)
+        rng (np.random.Generator)
 
     Returns:
         solver (GurobiSolver): solver object. See `solver.py` for details
@@ -235,10 +279,8 @@ def opt_setup_hydro_basic(N, lam, rng):
     lognorm_sigmas= np.sqrt(np.log(np.power(np.divide(sigmas,means), 2) + 1))
     lognorm_means = np.log(means) - np.square(lognorm_sigmas)/2
 
-    # TEMP
-    scaling_factor = 1 
     scenarios = np.array([rng.lognormal(
-                            mean=scaling_factor*lognorm_means[i], 
+                            mean=lognorm_means[i], 
                             sigma=lognorm_sigmas[i], 
                             size=N,
                           ) 
@@ -346,6 +388,7 @@ def opt_setup_hydro_basic(N, lam, rng):
     print("Setup time: {}s".format(time.time() - start_time))
 
     x_0 = hydro_['INITIAL'][:n_regions].to_numpy()
+    print(">> x_0={}".format(x_0))
 
     solver = GurobiSolver(
         m, 
