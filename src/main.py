@@ -207,7 +207,7 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_
     # print("F(x^*):", opt)
     print("Solution of x={} with value F(x)={}".format(x, val))
 
-def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
+def run_hydro_basic(scen_seed, T, N, nprocs, mode, niters, perturb, select_seed=0):
     """
     Runs SDDP on hydro problem 
     
@@ -224,7 +224,6 @@ def run_hydro_basic(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
     lam = 0.9906
     nprocs = 1
     n = 4
-    T = 12
     eps = 10000
 
     M_h = 25
@@ -292,6 +291,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--N",      type=positive_type,    help="Number of scenarios", default=10)
+    parser.add_argument("--T",      type=positive_type,    help="Search length", default=12)
     parser.add_argument("--scen_seed", type=nonnegative_type, help="Seed for scenario generation", default=0)
     parser.add_argument("--sel_seed", type=nonnegative_type, help="Seed for scenario selection", default=0)
     parser.add_argument("--prob",   type=nonnegative_type, help="Problem ID. (hydro=1, price=2)", default=1)
@@ -304,7 +304,7 @@ if __name__ == '__main__':
     print("Args:\n", args, "\n")
 
     if args.prob == 1:
-        run_hydro_basic(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
+        run_hydro_basic(args.scen_seed, args.T, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 2:
         run_electricity_pricing(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 3:
