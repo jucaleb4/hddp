@@ -110,6 +110,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
 
     if is_host:
         params["rng"] = np.random.default_rng(params.get("sel_seed", None))
+    use_x_0 = params["mode"] == EDDP_ONLY_LB_MODE_LINEAR or params["mode"] == EDDP_UB_AND_LB_MODE
 
     while 1:
         s_time = time.time()
@@ -120,7 +121,8 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             x_curr, 
             start_scenario_idx, 
             end_scenario_idx,
-            params
+            params,
+            use_x_0
         )
 
         # select next search point and calculates value and gradients
@@ -345,16 +347,14 @@ def initiate_workers(x_0, params, solvers, nprocs):
 
     return [q_host, q_child, ps, params]
 
-def solve_scenarios(solver, x_0, x_curr, start, end, params):
+def solve_scenarios(solver, x_0, x_curr, start, end, params, use_x_0=False):
     agg_x = np.array([], dtype=float)
     agg_val = np.array([], dtype=float)
     agg_grad = np.array([], dtype=float)
     agg_ctg = np.array([], dtype=float)
 
     for i in range(start, end):
-        if i == 0 and (
-                params["mode"] == EDDP_ONLY_LB_MODE_LINEAR or \
-                params["mode"] == EDDP_UB_AND_LB_MODE):
+        if i == 0 and use_x_0:
             (x, val, grad, ctg) = solver.solve(x_0, 0) 
         else:
             (x, val, grad, ctg) = solver.solve(x_curr, i) 
