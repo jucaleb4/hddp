@@ -97,7 +97,7 @@ def opt_setup_inventory_basic(N, lam):
     x_0 = np.array([10])
     return solver, x_0, avg
 
-def opt_electricity_price_setup(N, lam, lowerr):
+def opt_electricity_price_setup(N, lam):
     """
     Sets up basic 2 stage electricity price model.
 
