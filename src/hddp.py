@@ -298,6 +298,7 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
         i_rand = params["rng"].integers(1, params["N"], endpoint=True)
         x = agg_x[i_rand]
         sat_lvl = S.get(x)
+        idx = i_rand
     else:
         raise Exception("Unknown params mode {}".format(params['mode']))
 
@@ -318,6 +319,7 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
 
     # TEMP
     # print(">> idx={} val={} grad={}".format(idx + ignore_zeroth_scenario, avg_val, avg_grad))
+    print(">> idx={}".format(idx))
     return [x, val, grad, avg_val, avg_grad, sat_lvl]
 
 def initiate_workers(x_0, params, solvers, nprocs):

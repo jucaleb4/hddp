@@ -245,7 +245,7 @@ def opt_setup_hydro_basic(N, lam, rng):
                         for i in range(n_regions)])
     # TEMP
     print(">> scenarios: \n{}\n".format(scenarios))
-    scenario_0 = np.array([hydro_['INITIAL'][n_regions:2*n_regions].to_numpy()]).T
+    scenario_0 = np.array([hydro_['INITIAL'][n_regions:2*n_regions].to_numpy()]).T 
     scenarios = np.hstack((scenario_0, scenarios)).T
 
     demand = demand.to_numpy()
@@ -338,8 +338,8 @@ def opt_setup_hydro_basic(N, lam, rng):
                    gp.GRB.MINIMIZE)
 
     # TEMP
-    m.setParam(gp.GRB.Param.FeasibilityTol, 1e-2)
-    m.setParam(gp.GRB.Param.IntFeasTol, 1e-1)
+    # m.setParam(gp.GRB.Param.FeasibilityTol, 1e-2)
+    # m.setParam(gp.GRB.Param.IntFeasTol, 1e-1)
 
     m.update()
 
