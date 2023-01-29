@@ -1,7 +1,7 @@
 import os
 
 # (0,1,2,3,4) EDDP, EDDPL, EDDPUL, SDDP, SEDDP 
-modes = [0,4]
+modes = [0,1,4]
 sce_seeds = [0]
 sel_seeds = [0]
 

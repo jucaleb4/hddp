@@ -79,6 +79,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
     under_V = UnderApproxValue(n)
     S       = SaturatedSet(params)
     x_curr  = x_0
+    x_curr_inf = x_0
     iter_ct = 1
     last_x = last_val = None
     maxiter = params['max_iter']
@@ -121,9 +122,20 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             x_curr, 
             start_scenario_idx, 
             end_scenario_idx,
-            params,
             use_x_0
         )
+
+        # TEMP
+        if use_x_0:
+            [add_agg_x, _, _, _] = solve_scenarios(
+                solver, 
+                None,
+                x_curr_inf, 
+                start_scenario_idx, 
+                end_scenario_idx,
+                use_x_0=False
+            )
+            agg_x[1:] = add_agg_x[1:]
 
         # select next search point and calculates value and gradients
         if is_host:
@@ -140,6 +152,22 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                 params,
             )
             [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
+
+            # select next point from only last set of points
+            if use_x_0:
+                _tupl = select_subproblem(
+                    q_host, 
+                    q_child, 
+                    nprocs, 
+                    add_agg_x[1:], 
+                    agg_val, 
+                    agg_grad, 
+                    S, 
+                    lb_model, 
+                    ub_model, 
+                    params,
+                )
+                [x_curr_inf, _, _, _, _, _] = _tupl
 
             if params.get("perturb", False):
                 print(">> perturbing")
@@ -347,7 +375,7 @@ def initiate_workers(x_0, params, solvers, nprocs):
 
     return [q_host, q_child, ps, params]
 
-def solve_scenarios(solver, x_0, x_curr, start, end, params, use_x_0=False):
+def solve_scenarios(solver, x_0, x_curr, start, end, use_x_0=False):
     agg_x = np.array([], dtype=float)
     agg_val = np.array([], dtype=float)
     agg_grad = np.array([], dtype=float)
