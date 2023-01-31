@@ -220,9 +220,7 @@ def run_hydro_basic(scen_seed, T, N, nprocs, mode, niters, perturb, select_seed=
         perturb (bool): whether to perturb the solutions
         select_seed (int): seed for scenario selection
     """
-    N = 10
     lam = 0.9906
-    nprocs = 1
     n = 4
     eps = 10000
 
@@ -253,8 +251,8 @@ def run_hydro_basic(scen_seed, T, N, nprocs, mode, niters, perturb, select_seed=
         'mode': mode,
         'perturb': perturb,
         'eps_lvls': eps_lvls,
-        'evaluate_lb': True,
-        'evaluate_ub': True,
+        'evaluate_lb': False,
+        'evaluate_ub': False,
         'sel_seed': select_seed,
     }
 
