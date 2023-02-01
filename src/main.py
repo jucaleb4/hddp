@@ -258,8 +258,8 @@ def run_hydro_basic(scen_seed, T, N, nprocs, mode, niters, perturb, select_seed=
 
     # Create multiple solvers for each proc
     solvers = [None]*nprocs
-    rng = np.random.default_rng(scen_seed)
     for i in range(nprocs):
+        rng = np.random.default_rng(scen_seed)
         solver, x_0 = opt_setup.opt_setup_hydro_basic(N, lam, rng)
         if n != len(x_0):
             print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))

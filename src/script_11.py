@@ -7,13 +7,13 @@ sel_seed = 1
 T = 120
 niters = 3000
 N = 120
-debug = True
-nprocs_arr = [2]
+debug = False
+nprocs_arr = [1,2,4,6,8,10,12]
 
 ct = 1100
 
 for nprocs in nprocs_arr:
-    print("--mode {} --niters {} --scen_seed {} --sel_seed {} --N {} --T {} >> output/run_{}.txt".format(mode, niters, sce_seed, sel_seed, N, T, ct))
+    print("--mode {} --niters {} --scen_seed {} --sel_seed {} --N {} --T {}".format(mode, niters, sce_seed, sel_seed, N, T))
     if debug:
         os.system("python main.py --mode {} --niters {} --scen_seed {} --sel_seed {} --N {} --T {} --prob 1 --nprocs {}".format(mode, niters, sce_seed, sel_seed, N, T, nprocs))
     else:

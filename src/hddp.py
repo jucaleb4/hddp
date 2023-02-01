@@ -112,6 +112,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
     if is_host:
         params["rng"] = np.random.default_rng(params.get("sel_seed", None))
     use_x_0 = params["mode"] == EDDP_ONLY_LB_MODE_LINEAR or params["mode"] == EDDP_UB_AND_LB_MODE
+    use_x_0 = False
 
     # TEMP
     print("I am solving [{}-{}]".format(start_scenario_idx, end_scenario_idx))
