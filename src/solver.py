@@ -2,67 +2,6 @@ import numpy as np
 import gurobipy as gp
 import re
 
-class Cut:
-    def __init__(self, val, grad, x_center):
-        self.val = val
-        self.grad = grad
-        self.x_center = x_center
-        self.last_iter = 0
-        self.num_uses = 0
-
-class UnderApproxValue:
-    """ Underapproximation of value function """
-
-    def __init__(self, n):
-        """ @n is dim of variable/gradient 
-        
-        Args:
-            n (int): dimension of variable/gradient
-        """
-        # Custom datatype for store cuts
-        self.cuts = np.array([], dtype=Cut)
-
-
-    def add_cut(self, avg_val, avg_grad, x_center):
-        """ Given N solutions, construct cut 
-        
-        Args:
-            avg_val (float): average value of N solutions
-            avg_grad (np.array): average gradient of N solutions
-            x_center (np.array): average state of N solutions
-        """
-        new_cut = Cut(avg_val, avg_grad, x_center)
-        self.cuts = np.append(self.cuts, new_cut)
-
-    def last_N_created_cuts(self, N=-1):
-        """ Returns @N (N=-1 means all) most recently created cuts
-
-        Args:
-            N (int): number of cuts to return
-
-        Returns:
-            num_cuts (int): number of cuts returned
-            val_arr (np.array): array of values
-            grad_arr (np.array): array of gradients
-            x_center_arr (np.array): array of states
-        """
-        num_cuts = len(self.cuts)
-
-        if num_cuts == 0:
-            return 0, None, None, None
-
-        if N==-1: 
-            N = num_cuts
-
-        val_arr = [self.cuts[i].val for i in range(num_cuts-N, num_cuts)]
-        grad_arr = [self.cuts[i].grad for i in range(num_cuts-N, num_cuts)]
-        x_center_arr = [self.cuts[i].x_center for i in range(num_cuts-N, num_cuts)]
-
-        return len(val_arr), val_arr, grad_arr, x_center_arr
-
-    def get_num_cuts(self):
-        return len(self.cuts)
-
 class LowerBoundModel:
     def __init__(self, n, initial_lb=None):
         """ Creates lower bound model
@@ -467,18 +406,8 @@ class GurobiSolver:
 
         return [x_sol, val, grad, ctg]
 
-    def add_newest_cut(self, x_prev, under_V):
-
-        # obtain most recent cuts and add as constraint
-        num_cuts, cut_val, cut_grad, cut_x = under_V.last_N_created_cuts(1)
-
-        # if we have any cuts
-        if num_cuts > 0:
-            cut_val = cut_val[0]
-            cut_grad = cut_grad[0]
-            cut_x = cut_x[0]
-
-            self.md.addConstr(self.t - cut_grad@self.x >= cut_val-cut_grad@x_prev)
+    def add_cut(self, val, grad, x_prev):
+        self.md.addConstr(self.t - grad@self.x >= val-grad@x_prev)
 
 class SaturatedSet:
 
