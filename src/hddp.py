@@ -1,4 +1,5 @@
-from solver import SaturatedSet, LowerBoundModel, UpperBoundModel
+from solver import LowerBoundModel, UpperBoundModel
+from utils import SaturatedSet
 import numpy as np
 import numpy.linalg as la
 from multiprocessing import Process, JoinableQueue, Queue
