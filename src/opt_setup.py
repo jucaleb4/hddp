@@ -2,7 +2,7 @@ import gurobipy as gp
 import numpy as np
 import pandas
 import time
-from solver import GurobiSolver, GenericSolver
+from solver import GurobiSolver, GenericSolver, EconomicDispatchSolver, PDSASolverForLPs
 
 from typing import Tuple, Any
 
@@ -143,15 +143,19 @@ def opt_simple(N, lam):
 
 def opt_electricity_price_setup_v2(
             N_1: int, N_2: int, lam: float,
-            rng: np.random._generator.Generator)  \
+            rng: np.random._generator.Generator, use_PDSA: bool,
+            min_val: float=0, max_val: float=1e10)  \
             -> Tuple[GenericSolver, np.ndarray]:
-    """ Setsups basic 2 stage electricity price with focus on implementing via
+    """ Sets up basic 2 stage electricity price with focus on implementing via
     matrix form
 
     :params N_1: number of scenarios for first stage problem
     :params N_2: number of scenarios for second stage problem
     :params lam: discount factor
     :params rng: random number generator for settling the constraints
+    :params use_PDSA: use PDSA solver (if false, then Gurobi solver)
+    :params min_val: minimum value
+    :params max_val: largest value
     :returns c: cost vector
     :returns A: constraint matrix
     :returns b: rhs vector
@@ -164,101 +168,110 @@ def opt_electricity_price_setup_v2(
     # TODO: Make these parameters?
     n = 10 # number of generators
     r = 4  # number of demands
-    mrkt_cost = 25 # cost to generate power in first stage problem
-    self_cost = 100 # cost to generate power in second stage problem
-    beta = 0.8 + 0.2*rng.random() # battery degredation
+    mrkt_cost_arr = 20 + 10 * rng.random(n) # 1st stage thermal cost 
+    self_cost = 100 # 2nd stage cost to generate self-power
+    beta_0 = 0.8 + 0.2*rng.random() # 1st-stage battery degredation
+    beta_1 = 0.8 + 0.2*rng.random() # 2nd-stage transport degredation
+    tildeD = 150 + 50 * rng.random(N_2) # demands for second stage problem
+    C = 1000
     assert n >= r
 
     # define some parameters and randomness for the problem 
-    battery_lb_arr = np.ones(r) # 5*rng.random(r)
+    battery_lb_arr = 5*rng.random(r)
     battery_ub_arr = 50 * 10*rng.random(r)
     generator_lb_arr = 200*rng.random(n)
     generator_ub_arr = 500 + 200*rng.random(n)
 
-    scenarios = np.zeros((N_1+1, r))
-    scenarios[0] = 50 + 150*rng.random(r)
-    scenarios[1] = 75 + 125*rng.random(r)
+    first_demand = np.zeros((N_1+1, r))
+    first_demand[0] = 50 + 150*rng.random(r)
+    first_demand[1] = 75 + 125*rng.random(r)
     for i in range(1,N_1):
-        scenarios[i+1] = (125 - i/50) + (200 - 125 + i/50)*rng.random(r)
+        first_demand[i+1] = (125 - i/50) + (200 - 125 + i/50)*rng.random(r)
+    second_demand = 50 + 100*rng.random(N_2)
 
-    # demands for second stage problem
-    tildeD = 150 + 50 * rng.random(N_2)
-
-    m = gp.Model()
-
-    # List of variables and constraints
-    dummy_cons_idx = np.array([], dtype=int)
-    rand_rhs_idx = np.array([], dtype=int)
-    con_idx_ct = 0
-
-    # define variables
-    b = m.addMVar(r, name="battery_now")
-    b_0 = m.addMVar(r, name="battery_past")
-    c = mrkt_cost * np.ones(n)
-    g = m.addMVar(n, obj=c, name="generator")
+    # Model, variables, and holder/counters
+    md = gp.Model()
+    now_var_name = "battery_now"
+    now = md.addMVar(r, lb=-float('inf'), name=now_var_name)
+    now_var_name_arr = ["{}[{}]".format(now_var_name, i) for i in range(r)]
+    past = md.addMVar(r, lb=-float('inf'), name="battery_past")
+    c = mrkt_cost_arr 
+    g = md.addMVar(n, obj=c, lb=-float('inf'), name="generator")
     hs = []
+    curr_state_vars_idx = np.arange(r)
+    subprob_var_idx_list = []
+    var_idx_ct = 2*r + n
+    dummy_cons_idx = None
+    rand_rhs_idx = None
 
     # generator in second stage problem for scenarios in SAA
-    for i in range(N_1):
-        # projection
-        h_i = m.addMVar(r, lb=0, name="generator_2nd_stage_{}".format(i))
+    for i in range(N_2):
+        if use_PDSA:
+            h_i = md.addMVar(r, name="generator_2nd_stage_{}".format(i))
+        else:
+            c_h = np.append(C/N_2, np.zeros(r))
+            h_i = md.addMVar(r+1, obj=c_h, name="generator_2nd_stage_{}".format(i))
         hs.append(h_i)
+        subprob_var_idx_list.append(np.arange(var_idx_ct, var_idx_ct+r))
+        var_idx_ct += r
 
-    # add constraints (initialize with lower bound)
-    m.addConstr(b_0 == battery_lb_arr, "dummy")
-    dummy_cons_idx = np.append(dummy_cons_idx, np.arange(r))
-    con_idx_ct += r
+    # dummy constraint
+    md.addConstr(past == battery_lb_arr, name="dummy")
+    dummy_cons_idx = np.arange(r)
 
-    # demand (initalize with scenario 0)
+    # demand constraint (initalize with scenario 0 as rhs)
     gen_split = np.array_split(np.arange(n), r)
-    for i in range(r):
-        idxs = gen_split[i]
-        m.addConstr(
-            sum(g[j] for j in idxs) 
-            - b[i] + beta*b_0[i] 
-            - sum(hs[j][i] for j in range(N_1)) 
-            == scenarios[0][i], 
-            name="rand[{}]".format(i)
+    for k in range(r):
+        idxs = gen_split[k]
+        md.addConstr(
+            sum(g[i] for i in idxs) 
+            - now[k] + beta_0*past[k] 
+            - (1./N_1) * sum(hs[i][k] for i in range(N_1)) 
+            == first_demand[0][k], 
+            name="rand[{}]".format(k)
         )
-        rand_rhs_idx = np.append(rand_rhs_idx, con_idx_ct)
-        con_idx_ct += 1
+    rand_rhs_idx = np.arange(r,2*r)
+
+    # 2nd stage demand constraint
+    if not use_PDSA:
+        for i in range(N_2):
+            D = second_demand[i]
+            md.addConstr(
+                hs[i][0] + hs[i][1] 
+                + beta_1*sum(hs[i][k] for k in range(2,r)) >= D,
+            )
 
     # upper and lower bounds (with slack variables)
-    s_b_lb = m.addMVar(r, name="battery_slack_lb")
-    s_b_ub = m.addMVar(r, name="battery_slack_ub")
-    m.addConstr(-b + s_b_lb == -battery_lb_arr, name="battery lb")
-    m.addConstr(b + s_b_ub == battery_ub_arr, name="battery ub")
-    con_idx_ct += 2*r
+    s_b_lb = md.addMVar(r, name="battery_slack_lb")
+    s_b_ub = md.addMVar(r, name="battery_slack_ub")
+    md.addConstr(-now + s_b_lb == -battery_lb_arr, name="battery lb")
+    md.addConstr( now + s_b_ub ==  battery_ub_arr, name="battery ub")
 
-    s_g_lb = m.addMVar(n, name="generator_slack_lb")
-    s_g_ub = m.addMVar(n, name="generator_slack_ub")
-    m.addConstr(-g + s_g_lb == -generator_lb_arr, name="generator lb")
-    m.addConstr(g + s_g_ub == generator_ub_arr, name="generator ub")
-    con_idx_ct += 2*n
+    s_g_lb = md.addMVar(n, name="generator_slack_lb")
+    s_g_ub = md.addMVar(n, name="generator_slack_ub")
+    md.addConstr(-g + s_g_lb == -generator_lb_arr, name="generator lb")
+    md.addConstr( g + s_g_ub ==  generator_ub_arr, name="generator ub")
 
-    s_secondstage_generator_ub_arr = 500 + 200*rng.random(r)
+    secondstage_generator_ub_arr = 500 + 200*rng.random(r)
 
-    # TODO: Provide option to make two stage problem as a single LP
-    for i in range(N_1):
-        s_h_i_lb = m.addMVar(r, name="secondstage_gen_slack_ub")
-        m.addConstr(hs[i] + s_h_i_lb == s_secondstage_generator_ub_arr, name="secondstage_gen_ub")
-        con_idx_ct += r
+    for i in range(N_2):
+        s_h_i_lb = md.addMVar(r, name="secondstage_gen_slack_ub")
+        if use_PDSA:
+            md.addConstr(hs[i] + s_h_i_lb == secondstage_generator_ub_arr, 
+                         name="secondstage_gen_ub")
+        else:
+            # Gurobi has one extra variable h_0 we do not want upper bound for
+            md.addConstr(hs[i][1:] + s_h_i_lb == secondstage_generator_ub_arr, 
+                         name="secondstage_gen_ub")
 
     # Set as minimization problem
-    m.setAttr('ModelSense', 1)
-    m.update()
+    md.setAttr('ModelSense', 1)
+    md.update()
 
-    # TODO: Remove this
-    if True:
-        m.optimize()
-        print("Optimal battery: {}".format(b.X))
-        print("Optimal solution: {}".format([x.X for x in m.getVars()]))
-
-    # get [c,A,b] for LP of problem
-    c = m.getAttr('Obj', m.getVars())
-    A = m.getA() # returns sparse array
-    b = m.getAttr('RHS', m.getConstrs())
-
+    c = md.getAttr('Obj', md.getVars())
+    A = md.getA() # returns sparse array
+    b = md.getAttr('RHS', md.getConstrs())
+    
     # initial feasible solution for easy constraints
     x_0 = np.zeros(len(c))
     proj_idx = np.arange(len(c))
@@ -268,7 +281,50 @@ def opt_electricity_price_setup_v2(
     x_0[r:2*r] = (battery_lb_arr + battery_ub_arr)/2
     x_0[2*r:2*r+n] = (generator_lb_arr + generator_ub_arr)/2
 
-    return c, A, b, x_0, proj_idx, dummy_cons_idx, rand_rhs_idx, scenarios, tildeD
+    if use_PDSA:
+        ed_solver = EconomicDispatchSolver(
+            r, 
+            C, 
+            second_demand,
+            beta_1
+        )
+
+        # TODO: Allow better iniital upper and lower bound
+        solver = PDSASolverForLPs(
+            md,
+            now_var_name_arr,
+            A,
+            b,
+            c,
+            lam,
+            ed_solver, 
+            first_demand,
+            curr_state_vars_idx,
+            subprob_var_idx_list,
+            proj_idx,
+            dummy_cons_idx,
+            rand_rhs_idx,
+            min_val=min_val,
+            max_val=max_val,
+            seed=1,
+            warm_start_x=x_0
+        )
+
+    else:
+        solver = GurobiSolver(
+            md, 
+            now, 
+            now_var_name_arr,
+            lam, 
+            first_demand,
+            min_val = 0,
+            max_val = 0,
+            past_state_for_min_val=battery_lb_arr,
+            past_state_for_max_val=battery_ub_arr,
+        )
+
+    x_0_state = x_0[curr_state_vars_idx]
+    return solver, x_0_state
 
 def opt_electricity_price_setup(N, lam, rng):
     """

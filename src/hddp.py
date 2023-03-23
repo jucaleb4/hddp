@@ -190,7 +190,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             [x_next, val, grad, x_next_sat_lvl] = q_child.get() 
 
         # Select and add new cut, update saturation data structure
-        solver.add_cutt(val, grad, x_curr)
+        solver.add_cut(val, grad, x_curr)
         S.update(x_curr, max(0, min(S.get(x_curr), x_next_sat_lvl - 1)))
 
         # evaluate approximate upper and lower bounds

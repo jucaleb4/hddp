@@ -207,6 +207,75 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_
     # print("F(x^*):", opt)
     print("Solution of x={} with value F(x)={}".format(x, val))
 
+def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
+    lam = 0.95
+    n = 4
+    T = 60
+    eps = 1
+
+    M_h = 25
+    M = 25
+    uM = 10000
+    D = 100000
+    eps_lvls = np.zeros(T)
+    eps_lvls[T-1] = M_h*D/(1-lam)
+    _eps = 0.01
+    for t in range(T-2,-1,-1):
+        eps_lvls[t] = lam**(T-t-1) * eps_lvls[T-1]
+        for tau in range(t, T-1):
+            eps_lvls[t] += (M + uM)*_eps*lam**(tau-t)
+
+    params = {
+        'L' : 0*np.zeros(n),
+        # 'R' : 201000*np.ones(len(x_0)),
+        'R' : 25*np.ones(n),
+        'T' : T,
+        'N' : N,
+        'n' : n,
+        'eps': eps,
+        'lam': lam,
+        'M_0': 500, 
+        'fwd_T': 0, 
+        'max_iter': niters,
+        'mode': mode,
+        'perturb': perturb,
+        'eps_lvls': eps_lvls,
+        'evaluate_lb': False,
+        'evaluate_ub': True,
+        'sel_seed': select_seed,
+    }
+
+    # Create multiple solvers for each proc
+    solvers = [None]*nprocs
+    rng = np.random.default_rng(scen_seed)
+    use_PDSA = True
+    N_1 = N
+    N_2 = 10 # number of scenarios for second stage
+    MAX_VAL = 54140
+    MIN_VAL = 19605
+    for i in range(nprocs):
+        rng = np.random.default_rng(100)
+        solver, x_0 = opt_setup.opt_electricity_price_setup_v2(
+            N_1, 
+            N_2, 
+            lam, 
+            rng, 
+            use_PDSA, 
+            min_val=MIN_VAL, 
+            max_val=MAX_VAL
+        )
+        if n != len(x_0):
+            print("Error: n != len(x_0) ({} != {}), exitting...".format(n, len(x_0)))
+            exit(0)
+        solvers[i] = solver
+
+    # x, val = HDDP(x_0, eps, params, solver)
+    x, val = HDDP_multiproc(x_0, params, solvers, nprocs)
+
+    print("x_0:", x_0)
+    # print("F(x^*):", opt)
+    print("Solution of x={} with value F(x)={}".format(x, val))
+
 def run_hydro_basic(scen_seed, T, N, nprocs, mode, niters, perturb, select_seed=0):
     """
     Runs SDDP on hydro problem 
@@ -309,5 +378,7 @@ if __name__ == '__main__':
         run_simple(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 4:
         run_inventory(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
+    elif args.prob == 5:
+        run_electricity_pricing_v2(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     else:
         print("invalid problem id {}".format(args.prob))
