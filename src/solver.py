@@ -15,10 +15,15 @@ class GenericSolver(ABC):
     
     @abstractmethod
     def solve(self, x_prev: np.ndarray, scenario_id: int) \
-            -> Tuple[float, np.ndarray, np.ndarray]:
+            -> Tuple[np.ndarray, float, np.ndarray, float]:
         """ Solves subproblem @scenario_id using @x_prev as the previous point.
         Returns a cut, or an (approximately) optimal objective value, primal,
-        and dual variable.
+        dual variable, and cost to go.
+
+        :returns x_sol: optimal primal solution
+        :returns val: optimal solution value
+        :returns grad: subgradient
+        :return ctg: cost to go
         """
         pass
 
@@ -34,6 +39,9 @@ class GenericSolver(ABC):
     def get_scenarios(self):
         raise NotImplementedError
 
+    def set_scenario_idx(self, i):
+        pass
+
     def get_extrema_values(self) -> Tuple[float, float]:
         """
         Returns the estimated min and max values computed during construction
@@ -47,13 +55,48 @@ class GenericSolver(ABC):
     def get_num_scenarios(self):
         raise NotImplementedError
 
+    def get_gurobi_model(self):
+        raise NotImplementedError
+
+    def get_var_names(self):
+        raise NotImplementedError
+
 class EmptySolver(GenericSolver):
     """ Solver that returns zero value and gradient """
     def __init__(self, n):
         self.n = n
 
     def solve(self, x_prev, ver):
-        return [0, np.zeros(self.n), np.zeros(self.n)]
+        return np.zeros(self.n), 0, np.zeros(self.n), 0
+
+    def add_cut(self, val, grad, x_prev) -> None:
+        pass
+
+class EconomicDispatchSolver(GenericSolver):
+    """ Solver that returns zero value and gradient """
+    def __init__(self, r, C, D_arr, beta_1):
+        self.C = C
+        self.D_arr = D_arr
+        self.r = r
+        self._betas = np.append(1, beta_1*np.ones(r-1))
+
+    def get_scenarios(self):
+        return self.D_arr
+
+    def solve(self, x_prev, ver):
+        D = self.D_arr[ver]
+        leftover_demand = D - np.dot(x_prev, self._betas)
+
+        if leftover_demand <= 0:
+            grad = np.zeros(self.r)
+        else:
+            grad = self.C * self._betas
+
+        x_sol = max(leftover_demand, 0)
+        obj_val = self.C * x_sol
+        ctg = 0
+
+        return x_sol, obj_val, grad, ctg
 
     def add_cut(self, val, grad, x_prev) -> None:
         pass
@@ -130,7 +173,10 @@ class GurobiSolver(GenericSolver):
         self.min_val = min_val
         self.max_val = max_val
 
-        print(">> min_val={:.2e} max_val={:.2e}".format(min_val, max_val))
+        print(">> min_val={} max_val={}".format(min_val, max_val))
+
+        # TODO: Add test to check `self.md.getConstrByName("dummy[{}]".format(i))`  does not return None (i.e., setup Gurobi problem right)
+        # TODO: Check x is MVar type (and not numpy array) 
 
     def get_gurobi_model(self):
         return self.md_copy
@@ -246,6 +292,7 @@ class PDSASolverForLPs(GenericSolver):
                                and dual variable
     :params scenarios: RHS from SAA problem
     :params primal_var_idx_to_return: which primal variables correspond to state variables
+    :params subprob_var_idx_list: list of np.ndarray of indices subproblem corresponds to
     :params primal_projection_var_idxs: Projection onto non-negative orthodant 
     :params dummy_cons_idx: constraints corresponding to past state variable (dummy vars)
     :params rand_rhs_idx: constraint indices w.r.t. random variables
@@ -256,6 +303,8 @@ class PDSASolverForLPs(GenericSolver):
     """
     def __init__(
             self, 
+            md: Any,
+            var_names: Any,
             A: np.ndarray,
             b: np.ndarray,
             c: np.ndarray,
@@ -263,6 +312,7 @@ class PDSASolverForLPs(GenericSolver):
             subproblem_solver: GenericSolver, 
             scenarios: np.ndarray,
             primal_var_idx_to_return: np.ndarray,
+            subprob_var_idx_list: list,
             primal_projection_var_idxs: np.ndarray,
             dummy_cons_idx: np.ndarray,
             rand_rhs_idx: np.ndarray,
@@ -270,22 +320,28 @@ class PDSASolverForLPs(GenericSolver):
             max_val: Optional[float]=None,
             seed: Optional[int]=None,
             warm_start_x: Optional[np.ndarray]=None,
+            gsolver=None # Gurobi solver
     ): 
+        self.md = md.copy()
+        self.var_names = var_names
+        self.gsolver = gsolver
+
         self.A = A
         self.b = b
         self.c = c
+        self.subproblem_solver = subproblem_solver
+        self.scenarios = scenarios
         self.primal_var_idx_to_return = primal_var_idx_to_return
+        self.subprob_var_idx_list = subprob_var_idx_list
         self.primal_projection_var_idxs = primal_projection_var_idxs
         self.dummy_cons_idx = dummy_cons_idx
-        self.scenarios = scenarios
         self.rand_rhs_idx = rand_rhs_idx
-        self.subproblem_solver = subproblem_solver
 
         # Initialize DS for cuts and lower bound
         self.num_cuts = 1
         self.cut_capacity = 16
         self.cut_vals = np.zeros(self.cut_capacity)
-        self.cut_vals[0] = min_val
+        self.cut_vals[0] = min_val/(1-lam)
         self.cut_grads = np.zeros((self.cut_capacity, len(primal_var_idx_to_return)))
         self.lam = lam
 
@@ -304,21 +360,35 @@ class PDSASolverForLPs(GenericSolver):
 
         # Estimate parameters
         barG = 100
-        D_X  = 5000
+        D_X  = 1000
         W_norm = la.norm(A.todense(), ord=2)
         a_X = 1
 
-        N = 20000 # manually tune
+        N = 50 # manually tune
         self.n_iters = 20000 # manually tune
-        self.ws = np.ones(N)
-        self.thetas = np.ones(N)
-        self.taus = max(barG * (3*N)**0.5/D_X, 2**0.5 * W_norm)/a_X**0.5 * np.ones(N)
-        self.etas = 2**0.5 * W_norm/a_X**0.5 * np.ones(N)
+        self.w = 1
+        self.theta = 1
+        self.tau = max(barG * (3*N)**0.5/D_X, 2**0.5 * W_norm)/a_X**0.5
+        self.eta = 2**0.5 * W_norm/a_X**0.5 
+
+        self.i = 0
+
+    def get_gurobi_model(self):
+        return self.md
+
+    def get_var_names(self):
+        return self.var_names
+
+    def get_scenarios(self):
+        return self.scenarios
+
+    def set_scenario_idx(self, i):
+        self.i = i
 
     def get_extrema_values(self) -> Tuple[float, float]:
         return self.min_val, self.max_val
 
-    def solve(self, u, ver) -> Tuple[float, np.ndarray, np.ndarray]:
+    def solve(self, u, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
         """ Solves subproblem and returns approx. optimal value, primal, and
         dual variable.
 
@@ -328,8 +398,9 @@ class PDSASolverForLPs(GenericSolver):
         :returns barx: computed primal solution
         :returns subgrad: computed subgradient w.r.t. last state variable
         """
-
-        x = self.prev_x[ver] 
+        # Do not warm start
+        x = np.zeros(len(self.prev_x[self.i]))# self.prev_x[self.i] 
+        # x = self.prev_x[ver]
         y = np.zeros(self.A.shape[0]) 
         y_prev = y.copy()
         sumx = np.zeros(len(x))
@@ -343,56 +414,69 @@ class PDSASolverForLPs(GenericSolver):
             b[j] = u[i]
 
         # number of lower level scenarios
-        N = len(self.scenarios)
+        N = len(self.subproblem_solver.get_scenarios())
 
         for k in range(self.n_iters):
 
             # get unbiased subgradient
             i_k = self.rng.integers(0, N)
-            G_k = self.get_stochastic_subgradient_of_v2(x, i_k)
+            [_, G_k, _] = self.get_stochastic_subgradient_of_v2(x, i_k)
 
-            d = self.thetas[k] * (y - y_prev) + y
-            x = self.primal_prox(x, d, self.c, G_k, self.taus[k], 
+            d = self.theta * (y - y_prev) + y
+            x = self.primal_prox(x, d, self.c, G_k, self.tau, 
                                  self.primal_projection_var_idxs)
             y_prev = y
-            y = self.dual_prox(y, x, b, self.etas[k])
+            y = self.dual_prox(y, x, b, self.eta)
 
-            sumx += self.ws[k] * x
-            sumy += self.ws[k] * y
+            sumx += self.w * x
+            sumy += self.w * y
 
         # compute final output
-        sumw = float(np.sum(self.ws[:self.n_iters]))
-        barx = (1./sumw) * sumx
-        bary = (1./sumw) * sumy
+        sumw = self.w * self.n_iters
+        barx = (1/sumw) * sumx
+        bary = (1/sumw) * sumy
 
+        # warm start for next solve
         self.prev_x[ver] = barx
 
         subgrad = bary[self.dummy_cons_idx]
         objval = np.dot(self.c, barx)
         for i in range(N):
             # evaluate the output
-            [val, _, _] = self.subproblem_solver.solve(barx, i)
+            [val, _, ctg] = self.get_stochastic_subgradient_of_v2(barx, i)
             objval += (1/N) * val
+        objval += self.lam * ctg
 
-        barx_subset = barx[self.primal_var_idx_to_return]
-        return objval, barx, subgrad
+        # _, _, ggrad, _= self.gsolver.solve(u, ver)
+
+        barx_to_return = barx[self.primal_var_idx_to_return]
+
+        return barx_to_return, objval, subgrad, ctg
 
     def get_stochastic_subgradient_of_v2(self, x_k, i_k):
         """ Computes stochastic subgradient, which is sum of cost to go's (with
-        a discount factor) and v2 subproblem's subgradient.
+        a discount factor) and v2 subproblem's subgradient. Since subproblem
+        gradient and cost-to-go only corresponds to some parts of the primal
+        solution, we project onto the correct portion.
         """
-        [_, G_k, _] = self.subproblem_solver.solve(x_k, i_k)
+        # gradient from subproblem
+        subprob_var_idxs = self.subprob_var_idx_list[i_k]
+        x_k_subprob_proj = x_k[subprob_var_idxs]
+        [_, val, G_k, _] = self.subproblem_solver.solve(x_k_subprob_proj, i_k)
+        grad = np.zeros(len(x_k))
+        grad[subprob_var_idxs] = G_k
 
+        # gradient from cost-to-go
         nc = self.num_cuts
-        cut_evals = self.cut_vals[:nc] + np.dot(self.cut_grads[:nc], x_k)
+        x_k_primal_proj = x_k[self.primal_var_idx_to_return]
+        cut_evals = self.cut_vals[:nc] \
+                    + np.dot(self.cut_grads[:nc], x_k_primal_proj)
         tight_cut_idx = np.argmax(cut_evals)
-
+        ctg = cut_evals[tight_cut_idx]
         primal_idxs = self.primal_var_idx_to_return
-        # ensure state variable length matches gradient from cut
-        assert len(primal_idxs) == len(self.cut_grads[tight_cut_idx])
-        G_k[primal_idxs] += self.lam * self.cut_grads[tight_cut_idx]
+        grad[primal_idxs] += self.lam * self.cut_grads[tight_cut_idx]
 
-        return G_k
+        return val, grad, ctg
 
     def primal_prox(self, x_prev, d, c, G_k, tau, projection_var_idxs):
         # TODO: Transpose multiply
@@ -406,6 +490,7 @@ class PDSASolverForLPs(GenericSolver):
         return y
 
     def add_cut(self, val, grad, x_prev):
+        self.gsolver.add_cut(val, grad, x_prev)
 
         self.cut_vals[self.num_cuts] = val - np.dot(grad, x_prev)
         self.cut_grads[self.num_cuts] = grad
@@ -414,7 +499,7 @@ class PDSASolverForLPs(GenericSolver):
         self.num_cuts += 1
         if self.num_cuts >= self.cut_capacity:
             self.cut_vals = np.append(self.cut_vals, np.zeros(self.cut_capacity))
-            zeros_matrix = np.zeros(self.cut_capacity, len(self.primal_var_idx_to_return))
+            zeros_matrix = np.zeros((self.cut_capacity, len(self.primal_var_idx_to_return)))
             self.cut_grads = np.vstack((self.cut_grads, zeros_matrix))
             self.cut_capacity *= 2 
 
@@ -484,9 +569,9 @@ class UpperBoundModel:
         self.now_vars = gp.MVar(now_vars_list)
         self.n = len(now_var_name_arr)
         self.scenarios = scenarios
-        self.N = len(self.scenarios)
+        self.N = len(self.scenarios)-1
         self.lam = lam
-        self.V_0 = 1/(1-self.lam) * max_val
+        self.V_0 = 1/(1-self.lam) * 1.5*max_val
         self.M_0 = M_0
 
         # self.hat_vs contains all hat_v's across iterations and 
@@ -537,7 +622,7 @@ class UpperBoundModel:
             x (np.array): previous search point
         """
         new_hat_vs = np.array([])
-        for ver in range(self.N):
+        for ver in range(1,self.N+1):
             for i in range(self.n):
                 # set x^{k-1}
                 self.md_1.setAttr(

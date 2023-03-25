@@ -206,14 +206,16 @@ def opt_electricity_price_setup_v2(
 
     # generator in second stage problem for scenarios in SAA
     for i in range(N_2):
-        if use_PDSA:
-            h_i = md.addMVar(r, name="generator_2nd_stage_{}".format(i))
-        else:
-            c_h = np.append(C/N_2, np.zeros(r))
-            h_i = md.addMVar(r+1, obj=c_h, name="generator_2nd_stage_{}".format(i))
+        # if use_PDSA:
+        #     h_i = md.addMVar(r, name="generator_2nd_stage_{}".format(i))
+        # else:
+        #     c_h = np.append(C/N_2, np.zeros(r))
+        #     h_i = md.addMVar(r+1, obj=c_h, name="generator_2nd_stage_{}".format(i))
+        c_h = np.append(C/N_2, np.zeros(r))
+        h_i = md.addMVar(r+1, obj=c_h, name="generator_2nd_stage_{}".format(i))
         hs.append(h_i)
-        subprob_var_idx_list.append(np.arange(var_idx_ct, var_idx_ct+r))
-        var_idx_ct += r
+        subprob_var_idx_list.append(np.arange(var_idx_ct+1, var_idx_ct+(r+1)))
+        var_idx_ct += (r+1)
 
     # dummy constraint
     md.addConstr(past == battery_lb_arr, name="dummy")
@@ -226,7 +228,7 @@ def opt_electricity_price_setup_v2(
         md.addConstr(
             sum(g[i] for i in idxs) 
             - now[k] + beta_0*past[k] 
-            - (1./N_1) * sum(hs[i][k] for i in range(N_1)) 
+            - (1./N_1) * sum(hs[i][k+1] for i in range(N_1)) 
             == first_demand[0][k], 
             name="rand[{}]".format(k)
         )
@@ -238,7 +240,7 @@ def opt_electricity_price_setup_v2(
             D = second_demand[i]
             md.addConstr(
                 hs[i][0] + hs[i][1] 
-                + beta_1*sum(hs[i][k] for k in range(2,r)) >= D,
+                + beta_1*sum(hs[i][k] for k in range(2,r+1)) >= D,
             )
 
     # upper and lower bounds (with slack variables)
@@ -256,13 +258,15 @@ def opt_electricity_price_setup_v2(
 
     for i in range(N_2):
         s_h_i_lb = md.addMVar(r, name="secondstage_gen_slack_ub")
-        if use_PDSA:
-            md.addConstr(hs[i] + s_h_i_lb == secondstage_generator_ub_arr, 
-                         name="secondstage_gen_ub")
-        else:
+        # if use_PDSA:
+        #     md.addConstr(hs[i] + s_h_i_lb == secondstage_generator_ub_arr, 
+        #                  name="secondstage_gen_ub")
+        # else:
             # Gurobi has one extra variable h_0 we do not want upper bound for
-            md.addConstr(hs[i][1:] + s_h_i_lb == secondstage_generator_ub_arr, 
-                         name="secondstage_gen_ub")
+        #     md.addConstr(hs[i][1:] + s_h_i_lb == secondstage_generator_ub_arr, 
+        #                  name="secondstage_gen_ub")
+        md.addConstr(hs[i][1:] + s_h_i_lb == secondstage_generator_ub_arr, 
+                     name="secondstage_gen_ub")
 
     # Set as minimization problem
     md.setAttr('ModelSense', 1)
@@ -280,6 +284,19 @@ def opt_electricity_price_setup_v2(
     # later batteries
     x_0[r:2*r] = (battery_lb_arr + battery_ub_arr)/2
     x_0[2*r:2*r+n] = (generator_lb_arr + generator_ub_arr)/2
+
+    # TEMP: Remove this
+    gsolver = GurobiSolver(
+        md, 
+        now, 
+        now_var_name_arr,
+        lam, 
+        first_demand,
+        min_val = min_val,
+        max_val = max_val,
+        past_state_for_min_val=None,
+        past_state_for_max_val=None,
+    )
 
     if use_PDSA:
         ed_solver = EconomicDispatchSolver(
@@ -307,23 +324,16 @@ def opt_electricity_price_setup_v2(
             min_val=min_val,
             max_val=max_val,
             seed=1,
-            warm_start_x=x_0
+            warm_start_x=x_0,
+            gsolver=gsolver,
         )
 
     else:
-        solver = GurobiSolver(
-            md, 
-            now, 
-            now_var_name_arr,
-            lam, 
-            first_demand,
-            min_val = 0,
-            max_val = 0,
-            past_state_for_min_val=battery_lb_arr,
-            past_state_for_max_val=battery_ub_arr,
-        )
+        solver = gsolver
 
     x_0_state = x_0[curr_state_vars_idx]
+    # TEMP
+    x_0_state = np.array([345.7,28.1,4.3,4])
     return solver, x_0_state
 
 def opt_electricity_price_setup(N, lam, rng):

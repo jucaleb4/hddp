@@ -114,13 +114,10 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
     use_x_0 = params["mode"] == EDDP_ONLY_LB_MODE_LINEAR or params["mode"] == EDDP_UB_AND_LB_MODE
     use_x_0 = False
 
-    # TEMP
-    print("I am solving [{}-{}]".format(start_scenario_idx, end_scenario_idx))
-
     while 1:
         s_time = time.time()
 
-        [agg_x, agg_val, agg_grad, _] = solve_scenarios(
+        [agg_x, agg_val, agg_grad, agg_ctg] = solve_scenarios(
             solver, 
             x_0,
             x_curr, 
@@ -155,7 +152,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                 ub_model, 
                 params,
             )
-            [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl] = tupl
+            [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl, idx] = tupl
 
             # select next point from only last set of points
             if use_x_0:
@@ -171,17 +168,13 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                     ub_model, 
                     params,
                 )
-                [x_curr_inf, _, _, _, _, _] = _tupl
-
-            if params.get("perturb", False):
-                print(">> perturbing")
-                val += np.random.normal(0, 0.1)
-                grad += np.random.normal(0, 0.1, n)
-                x_next += np.random.normal(0, 0.1, n)
+                [x_curr_inf, _, _, _, _, _, idx] = _tupl
 
             # TEMP (sanity check to ensure LP returning something reasonable)
             if np.sum(np.abs(grad)) <= 0:
                 print("[!!] grad is zero, grad={}".format(grad))
+
+            solver.set_scenario_idx(idx)
 
             [last_x, last_val] = [x_next, val]
         elif not is_host:
@@ -190,7 +183,9 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             [x_next, val, grad, x_next_sat_lvl] = q_child.get() 
 
         # Select and add new cut, update saturation data structure
-        solver.add_cut(val, grad, x_curr)
+        print("TEMP: Adding cut [v,g,x]=[{}, {}, {}] ... {} ".format(val, grad, x_curr, val - avg_grad@x_curr))
+        # solver.add_cut(val, grad, x_curr)
+        solver.add_cut(avg_val, avg_grad, x_curr)
         S.update(x_curr, max(0, min(S.get(x_curr), x_next_sat_lvl - 1)))
 
         # evaluate approximate upper and lower bounds
@@ -217,7 +212,7 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             S_idx = S.get_idx(x_curr)
 
             print('[{:<.1e}s]  {})  _F(x_0):[[{:.2f}, {:.2f}]] \
-                \n\t\tS(x_0)={}  S{}={} (idx:{})'.format(
+                \n\t\tS(x_0)={}  S{}={} (idx:{}) x_0_sol={}'.format(
                     time.time() - s_time, 
                     iter_ct, 
                     lb, 
@@ -225,7 +220,8 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                     x_0_sat_lvl,
                     x_next, 
                     x_next_sat_lvl, 
-                    ','.join(S_idx.astype('str'))
+                    ','.join(S_idx.astype('str')),
+                    x_sol
                 ) 
             )
 
@@ -352,7 +348,7 @@ def select_subproblem(q_host, q_child, nprocs, agg_x, agg_val, agg_grad, S,
     for _ in range(nprocs-1):
         q_child.put(outmail) 
 
-    return [x, val, grad, avg_val, avg_grad, sat_lvl]
+    return [x, val, grad, avg_val, avg_grad, sat_lvl, idx]
 
 def initiate_workers(x_0, params, solvers, nprocs):
     q_host = Queue() # JoinableQueue()
