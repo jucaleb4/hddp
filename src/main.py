@@ -241,7 +241,7 @@ def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, sele
         'perturb': perturb,
         'eps_lvls': eps_lvls,
         'evaluate_lb': False,
-        'evaluate_ub': True,
+        'evaluate_ub': False,
         'sel_seed': select_seed,
     }
 
