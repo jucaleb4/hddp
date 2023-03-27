@@ -2,7 +2,6 @@ import numpy as np
 import gurobipy as gp
 import re
 import numpy.linalg as la
-import scipy.sparse.linalg as spla
 
 from abc import ABC, abstractmethod
 from typing import Tuple, Any, Optional
