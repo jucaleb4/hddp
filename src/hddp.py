@@ -153,6 +153,8 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
                 params,
             )
             [x_next, val, grad, avg_val, avg_grad, x_next_sat_lvl, idx] = tupl
+            val = avg_val
+            grad = avg_grad
 
             # select next point from only last set of points
             if use_x_0:
@@ -183,9 +185,8 @@ def _HDDP_multiproc(x_0, params, solver, nprocs, q_host, q_child, is_host):
             [x_next, val, grad, x_next_sat_lvl] = q_child.get() 
 
         # Select and add new cut, update saturation data structure
-        print("TEMP: Adding cut [v,g,x]=[{}, {}, {}] ... {} ".format(val, grad, x_curr, val - avg_grad@x_curr))
-        # solver.add_cut(val, grad, x_curr)
-        solver.add_cut(avg_val, avg_grad, x_curr)
+        # print("TEMP: Adding cut [v,g,x]=[{}, {}, {}] ... {} ".format(val, grad, x_curr, val - avg_grad@x_curr))
+        solver.add_cut(val, grad, x_curr)
         S.update(x_curr, max(0, min(S.get(x_curr), x_next_sat_lvl - 1)))
 
         # evaluate approximate upper and lower bounds

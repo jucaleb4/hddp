@@ -248,7 +248,7 @@ def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, sele
     # Create multiple solvers for each proc
     solvers = [None]*nprocs
     rng = np.random.default_rng(scen_seed)
-    use_PDSA = 0
+    use_PDSA = 1
     N_1 = N
     N_2 = 10 # number of scenarios for second stage
     MAX_VAL = 54140; MIN_VAL = 0
