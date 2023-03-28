@@ -364,7 +364,7 @@ class PDSASolverForLPs(GenericSolver):
         a_X = 1
 
         N = 50 # manually tune
-        self.n_iters = 20000 # manually tune
+        self.n_iters = 1000 # manually tune
         self.w = 1
         self.theta = 1
         self.tau = max(barG * (3*N)**0.5/D_X, 2**0.5 * W_norm)/a_X**0.5
