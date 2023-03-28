@@ -142,13 +142,14 @@ def opt_simple(N, lam):
     return solver, x_0
 
 def opt_electricity_price_setup_v2(
-            N_1: int, N_2: int, lam: float,
+            nn:int, N_1: int, N_2: int, lam: float,
             rng: np.random._generator.Generator, use_PDSA: bool,
             min_val: float=0, max_val: float=1e10)  \
             -> Tuple[GenericSolver, np.ndarray]:
     """ Sets up basic 2 stage electricity price with focus on implementing via
     matrix form
 
+    :params nn: number of generators
     :params N_1: number of scenarios for first stage problem
     :params N_2: number of scenarios for second stage problem
     :params lam: discount factor
@@ -166,7 +167,7 @@ def opt_electricity_price_setup_v2(
     :returns tildeD: array of random demands for second stage problem
     """
     # TODO: Make these parameters?
-    n = 10 # number of generators
+    n = nn # number of generators
     r = 4  # number of demands
     mrkt_cost_arr = 20 + 10 * rng.random(n) # 1st stage thermal cost 
     self_cost = 100 # 2nd stage cost to generate self-power

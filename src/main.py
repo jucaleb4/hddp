@@ -207,7 +207,7 @@ def run_electricity_pricing(scen_seed, N, nprocs, mode, niters, perturb, select_
     # print("F(x^*):", opt)
     print("Solution of x={} with value F(x)={}".format(x, val))
 
-def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0):
+def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, select_seed=0, nn=10):
     lam = 0.95
     n = 4
     T = 60
@@ -257,6 +257,7 @@ def run_electricity_pricing_v2(scen_seed, N, nprocs, mode, niters, perturb, sele
     for i in range(nprocs):
         rng = np.random.default_rng(100)
         solver, x_0 = opt_setup.opt_electricity_price_setup_v2(
+            nn,
             N_1, 
             N_2, 
             lam, 
@@ -358,6 +359,7 @@ if __name__ == '__main__':
         return x
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--n",      type=positive_type,    help="Number of generators", default=10)
     parser.add_argument("--N",      type=positive_type,    help="Number of scenarios", default=10)
     parser.add_argument("--T",      type=positive_type,    help="Search length", default=12)
     parser.add_argument("--scen_seed", type=nonnegative_type, help="Seed for scenario generation", default=0)
@@ -380,6 +382,6 @@ if __name__ == '__main__':
     elif args.prob == 4:
         run_inventory(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
     elif args.prob == 5:
-        run_electricity_pricing_v2(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed)
+        run_electricity_pricing_v2(args.scen_seed, args.N, args.nprocs, args.mode, args.niters, args.perturb, args.sel_seed, args.n)
     else:
         print("invalid problem id {}".format(args.prob))
