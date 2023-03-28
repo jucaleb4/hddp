@@ -229,7 +229,7 @@ def opt_electricity_price_setup_v2(
         md.addConstr(
             sum(g[i] for i in idxs) 
             - now[k] + beta_0*past[k] 
-            - (1./N_1) * sum(hs[i][k+1] for i in range(N_1)) 
+            - (1./N_2) * sum(hs[i][k+1] for i in range(N_2)) 
             == first_demand[0][k], 
             name="rand[{}]".format(k)
         )
