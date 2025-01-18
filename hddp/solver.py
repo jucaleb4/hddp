@@ -1,6 +1,7 @@
 import numpy as np
 import gurobipy as gp
 import re
+import os
 import numpy.linalg as la
 
 from abc import ABC, abstractmethod
@@ -25,6 +26,13 @@ class GenericSolver(ABC):
         self.x_ub_arr = x_ub_arr
         self.h_min_val = h_min_val
         self.h_max_val = h_max_val
+
+        n = len(x_lb_arr)
+        m = 1024
+        self.ct = 0
+        self.val_arr = np.zeros(m, dtype=float)
+        self.grad_arr = np.zeros((m,n), dtype=float)
+        self.x_prev_arr = np.zeros((m,n), dtype=float)
     
     @abstractmethod
     def solve(self, x_prev: np.ndarray, scenario_id: int) \
@@ -42,12 +50,28 @@ class GenericSolver(ABC):
 
     @abstractmethod
     def add_cut(self, val, grad, x_prev) -> None:
+        raise NotImplementedError
+
+    def save_cut(self, val, grad, x_prev) -> None:
         """ Adds cut to cost-to-go function, in the form of
         \[
             l_f(x) := val + <grad, x - x_prev>
         \]
         """
-        pass
+        self.val_arr[self.ct] = val
+        self.grad_arr[self.ct] = grad
+        self.x_prev_arr[self.ct] = x_prev
+        self.ct += 1
+
+        if self.ct == len(self.val_arr):
+            self.val_arr = np.append(self.val_arr, np.zeros(self.val_arr.shape, dtype=float))
+            self.grad_arr = np.vstack((self.grad_arr, np.zeros(self.grad_arr.shape, dtype=float)))
+            self.x_prev_arr = np.vstack((self.x_prev_arr, np.zeros(self.x_prev_arr.shape, dtype=float)))
+
+    def save_cuts_to_file(self, folder):
+        np.savetxt(os.path.join(folder, "vals.csv"), self.val_arr[:self.ct], delimiter=',')
+        np.savetxt(os.path.join(folder, "grad.csv"), self.grad_arr[:self.ct], delimiter=',')
+        np.savetxt(os.path.join(folder, "x_prev.csv"), self.x_prev_arr[:self.ct], delimiter=',')
 
     def get_scenarios(self):
         raise NotImplementedError
@@ -78,7 +102,7 @@ class EmptySolver(GenericSolver):
     def solve(self, x_prev, ver):
         return np.zeros(self.n), 0, np.zeros(self.n), 0
 
-    def add_cut(self, val, grad, x_prev) -> None:
+    def add_cut(self, val, grad, x_prev):
         pass
 
 class GurobiSolver(GenericSolver):
@@ -238,6 +262,7 @@ class GurobiSolver(GenericSolver):
         return [x_sol, val, grad, ctg]
 
     def add_cut(self, val, grad, x_prev):
+        self.save_cut(val, grad, x_prev)
         self.model.addConstr(self.t - grad@self.x >= val-grad@x_prev)
 
 class PDSASolverForLPs(GenericSolver):
@@ -463,6 +488,8 @@ class PDSASolverForLPs(GenericSolver):
         return y
 
     def add_cut(self, val, grad, x_prev):
+        # self.gsolver.save_cut(val, grad, x_prev)
+        self.save_cut(val, grad, x_prev)
         self.gsolver.add_cut(val, grad, x_prev)
 
         self.cut_vals[self.num_cuts] = val - np.dot(grad, x_prev)
@@ -531,11 +558,11 @@ class UpperBoundModel:
 
         The aforemtioned dual LP is
 
-        min  hat{v}'alpha + M*a
-        s.t. 1'alpha = 1
+        min  hat{v}'pi + M*r
+        s.t. 1'pi= 1
              Xa + e - f = bar{x}
-             -(e+f) + 1*a = 0
-             alpha,e,f,a >= 0
+             -(e+f) + 1*r = 0
+             alpha,e,f,r >= 0
 
         :param model (gurobipy.Model): model of original problem
         :param scenarios (list): list of scenarios
@@ -552,7 +579,7 @@ class UpperBoundModel:
         self.now_vars = gp.MVar(now_vars_list)
         self.n = len(now_var_name_arr)
         self.scenarios = scenarios
-        self.N = len(self.scenarios)-1
+        self.N = len(self.scenarios)
         self.lam = lam
         self.V_0 = h_max_val/(1-self.lam) 
         self.M = M
@@ -578,15 +605,17 @@ class UpperBoundModel:
                 # self.n, obj=self.lam*self.M/self.N, lb=0, name="f_{}".format(l)
                 self.n, obj=0, lb=0, name="f_{}".format(l)
             ))
-            self.rs.append(self.model_1.addVar(obj=self.lam*self.M/self.N, lb=0, name="f_{}".format(l)))
+            self.rs.append(self.model_1.addVar(obj=self.lam*self.M/self.N, lb=0, name="r_{}".format(l)))
 
         # affine span constraint
         self.affine_span_constrs = []
         self.sum_pi_constrs = []
-        for l in range(self.N+1):
+        for l in range(self.N):
+            # -bar{x} + (e-f) + Xpi = 0
             new_affine_constr = self.model_1.addConstr(
                 -self.now_vars + (self.es[l] - self.fs[l]) == np.zeros(self.n)
             )
+            # -(e+f) + 1*r = 0
             self.affine_span_constrs.append(new_affine_constr)
             self.model_1.addConstr(-self.es[l] - self.fs[l] + self.rs[l] == 0)
 
@@ -603,7 +632,7 @@ class UpperBoundModel:
         self.num_iters = 0
         # new objective each time (relies on input `x`), so we set it on the fly
 
-    def _solve_model_1_and_update_hat_vs(self, x):
+    def _solve_model_1_and_update_hat_vs(self, x, k):
         """ 
         Solves model 1 for all scenarios. Updates self.hat_vs with new solutions.
         This function is called from `add_search_point_to_ub_model`.
@@ -612,7 +641,7 @@ class UpperBoundModel:
             x (np.array): previous search point
         """
         new_hat_vs = np.array([])
-        for ver in range(1,self.N+1):
+        for ver in range(self.N):
             for i in range(self.n):
                 # set x^{k-1}
                 self.model_1.setAttr(
@@ -633,9 +662,10 @@ class UpperBoundModel:
             if self.num_iters == 0: # replace penalty (M) with V_0 cost to go
                 x_sol = self.now_vars.X
                 new_hat_vs = np.append(new_hat_vs, 
-                    self.model_1.objVal 
-                    + self.lam * self.V_0 
+                    # self.model_1.objVal 
+                    # + self.lam * self.V_0 
                     # - self.lam * self.M * np.sum(np.abs(x_sol)))
+                    self.V_0
                 )
             else:
                 new_hat_vs = np.append(new_hat_vs, self.model_1.objVal)
@@ -652,14 +682,13 @@ class UpperBoundModel:
             x (np.array): previous search point
         """
         # Compute \hat{v} (aka, solve Model 1)
-        self._solve_model_1_and_update_hat_vs(x)
+        self._solve_model_1_and_update_hat_vs(x, self.num_iters)
 
         # Update model 1: add new pi_i^{k-1} for each scenario {i}
         # Recall self.hat_vs stored hat_v's across iterations and scenarios.
         # Values in same iteration are grouped together in consecutive N elements,
         # hence, we offset by `N * num_iters` to dtermine which group of N
         # elemennts to use. 
-        one_appended_with_x = np.append(1, x).tolist()
         self.model_1.update()
         for l in range(self.N): # (l == ver)
             # TODO Can we make this one call rather than if/else? Reason we need if/else
@@ -675,7 +704,6 @@ class UpperBoundModel:
                 )
 
                 # add sum pi = 1 constraint
-                # for l in range(self.N):
                 self.sum_pi_constrs.append(
                     self.model_1.addConstr(
                         new_pi_var == 1, 
@@ -684,8 +712,10 @@ class UpperBoundModel:
                 )
 
             else:
+                # add new pi variable for 1'pi=1 and Xpi + (e-f) = bar{x}
                 constr_list_l = [self.sum_pi_constrs[l]] \
                                 + self.affine_span_constrs[l].tolist()
+                one_appended_with_x = np.append(1, x).tolist()
                 col_l = gp.Column(one_appended_with_x, constr_list_l)
                 self.model_1.addVar(
                     lb=0,
@@ -724,7 +754,7 @@ class UpperBoundModel:
         self.model_2.setObjective(self.mu + self.rho @ x, gp.GRB.MAXIMIZE)
         self.model_2.update()
         # Update hat v's to appropriate scenario
-        for ver in range(1, self.N+1):
+        for ver in range(self.N):
             for k in range(self.num_iters):
                 constr_ptr = self.model_2.getConstrByName(
                     # "model_2_cut_constr[{}]".format(k)
@@ -734,11 +764,14 @@ class UpperBoundModel:
                 self.model_2.setAttr(
                     "RHS", 
                     constr_ptr,
-                    self.hat_vs[(ver-1) + k*self.N],
+                    self.hat_vs[(ver) + k*self.N],
                 )
 
+            self.model_2.update()
             self.model_2.optimize()
 
             ub_model_sum += self.model_2.objVal
+            # if ver == 0:
+            #     print(len(self.hat_vs[ver::self.N]), self.hat_vs[ver::self.N][-5:])
 
         return ub_model_sum / self.N

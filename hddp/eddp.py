@@ -5,33 +5,37 @@ import numpy.linalg as la
 from multiprocessing import Process, JoinableQueue, Queue
 import time
 
+from hddp import opt_setup
+
 def get_epsilon_ts(M, eps, eps_T, T, lam, **kwargs):
     eps_ts_arr = np.zeros(T, dtype=float)
     eps_ts_arr[-1] = eps_T
     for t in range(T-2,-1,-1):
         eps_ts_arr[t] = 2*M*eps + lam*eps_ts_arr[t+1]
-    return eps_ts_arr
+    return eps_ts_arr.tolist()
 
-def fill_in_settings(x, settings, solver_arr):
+def fill_in_settings(x_0, settings, prob_solver):
     """ Fill in missing parameters based on problem (in solvers) """
-    settings["M"] = solver_arr[0].M_h/(1.-settings['lam'])
-    settings["eps_T"] = (solver_arr[0].h_max_val-solver_arr[0].h_min_val)/(1.-settings['lam'])
+    [h_min_val, h_max_val] = prob_solver.get_single_stage_lbub()
+    settings["M"] = float((h_max_val-h_min_val)/(1.-settings['lam']))
+    settings['n'] = len(x_0)
+    settings["eps_T"] = (prob_solver.h_max_val-prob_solver.h_min_val)/(1.-settings['lam'])
     settings["eps_lvls"] = get_epsilon_ts(**settings)
-    settings["n"] = len(x)
-    settings["x_lb_arr"] = solver_arr[0].x_lb_arr
-    settings["x_ub_arr"] = solver_arr[0].x_ub_arr
+    settings["x_lb_arr"] = prob_solver.x_lb_arr.tolist()
+    settings["x_ub_arr"] = prob_solver.x_ub_arr.tolist()
 
-def HDDP_multiproc(x_0, settings, solver_arr, n_procs):
+# def HDDP_multiproc(x_0, settings, solver_arr, n_procs):
+def HDDP_multiproc(settings, n_procs):
     setup_qs = False
-    fill_in_settings(x_0, settings, solver_arr)
 
     try:
-        [q_host, q_child, ps, settings] = init_workers(x_0, settings, solver_arr, n_procs)
+        # [q_host, q_child, ps, settings] = init_workers(x_0, settings, solver_arr, n_procs)
+        [q_host, q_child, ps, settings] = init_workers(settings, n_procs)
         setup_qs = True
         _HDDP_multiproc(
-            x_0, 
+            # x_0, 
             settings, 
-            solver_arr[0], 
+            # solver_arr[0], 
             n_procs, 
             q_host, 
             q_child, 
@@ -46,7 +50,18 @@ def HDDP_multiproc(x_0, settings, solver_arr, n_procs):
         q_host.close()
         q_child.close()
 
-def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_host):
+def get_problem(settings):
+    if settings['prob_name'] == 'hydro':
+        return opt_setup.create_hydro_thermal_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
+    elif settings['prob_name'] == 'portfolio':
+        pass
+    elif settings['prob_name'] == 'inventory':
+        pass
+    else:
+        raise Exception("Unknown prob_name %s" % settings['prob_name'])
+
+# def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_host):
+def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
     """
     Parallel variant of hierarchical EDDP. The host is processor p1, and the
     remaining are p[2,...,@n_procs]. The host and children communicate with each
@@ -62,6 +77,9 @@ def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_hos
     :param q_child:
     :param is_host:
     """
+    prob_solver, x_0 = get_problem(settings)
+    fill_in_settings(x_0, settings, prob_solver)
+
     S = utils.SaturatedSet(**settings)
     x_curr = np.copy(x_0)
     [start_scenario_idx, end_scenario_idx] = settings['scenario_endpts']
@@ -71,7 +89,7 @@ def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_hos
     ub_model = solver.UpperBoundModel(prob_solver.get_gurobi_model(), 
         prob_solver.get_scenarios()[1:], 
         settings["lam"], 
-        prob_solver.M_h*beta, 
+        settings['M'], # prob_solver.M_h*beta, 
         prob_solver.get_var_names(), 
         single_stage_max*beta,
     )
@@ -96,7 +114,7 @@ def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_hos
 
         # check termination
         x_0_sol = agg_x[0]
-        if (k % settings['T'] == 1) and S.get(x_0_sol) <= 1:
+        if S.get(x_0_sol) <= 1:
             break
         fwd_time_arr[k] = fwd_time_arr[k-1] + time.time() - s_time
 
@@ -143,7 +161,9 @@ def _HDDP_multiproc(x_0, settings, prob_solver, n_procs, q_host, q_child, is_hos
         if total_time_arr[k] >= settings['time_limit']:
             break
 
-    utils.save_logs(settings['log_folder'], total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr) 
+    if is_host:
+        utils.save_logs(settings['log_folder'], total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr) 
+        prob_solver.save_cuts_to_file(settings['log_folder'])
 
 def evaluate_bounds(x_0_sol, val_0, ctg_0, ub_model, lam, k, elpsd_time, print_progress=True):
     lb = val_0
@@ -177,11 +197,6 @@ def update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, eps_lvls):
         ))
         lvl_based_on_saturation = S.get(x_i)
         if lvl_based_on_gap < lvl_based_on_saturation:
-            print("Updating S(x_i)={} -> {} (gap={})".format(
-                lvl_based_on_saturation, 
-                lvl_based_on_gap,
-                gap
-            ))
             S.update(x_i, lvl_based_on_gap)
 
 def host_forward_get(n_procs, q_host, agg_x, agg_val, agg_grad):
@@ -222,9 +237,12 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
         [z_next, _, _] = S.largest_sat_lvl(agg_x[:], settings["rng"], prioritize_zero=False)
     elif settings['mode'] == utils.Mode.GAP_INF_EDDP:
         [z_next, _, _] = S.largest_sat_lvl(agg_x[:], settings["rng"], prioritize_zero=False)
-    else:
+    elif settings['mode'] == utils.Mode.Inf_SDDP:
         i_rand = settings["rng"].integers(0, settings["N"], endpoint=True)
         z_next = agg_x[i_rand]
+    # elif settings['mode'] == utils.Mode.INF_INF_EDDP:
+    else:
+        [z_next, _, _] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=False)
 
     x_next = z_next
     if settings['mode'] == utils.Mode.INF_EDDP and (k % settings['T'] == 0):
@@ -232,7 +250,8 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
 
     return [x_next, z_next, avg_val, avg_grad]
 
-def init_workers(x_0, settings, solver_arr, n_procs):
+# def init_workers(x_0, settings, solver_arr, n_procs):
+def init_workers(settings, n_procs):
     q_host = Queue() # JoinableQueue()
     q_child= Queue() # JoinableQueue()
     ps = [None]*n_procs
@@ -249,7 +268,8 @@ def init_workers(x_0, settings, solver_arr, n_procs):
         settings_i = settings.copy()
         settings_i['scenario_endpts'] = [scen_split[i+1][0], scen_split[i+1][-1]+1] # OMG!
         ps[i] = Process(target=_HDDP_multiproc, 
-                args=(x_0, settings_i, solver_arr[i], n_procs, q_host, q_child, False))
+                # args=(x_0, settings_i, solver_arr[i], n_procs, q_host, q_child, False))
+                args=(settings_i, n_procs, q_host, q_child, False))
         ps[i].start()
 
     return [q_host, q_child, ps, settings]

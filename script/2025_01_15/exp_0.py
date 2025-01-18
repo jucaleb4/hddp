@@ -9,7 +9,7 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 4
+MAX_RUNS = 5
 DATE = "2025_01_15"
 EXP_ID  = 0
 
@@ -30,8 +30,8 @@ def parse_sub_runs(sub_runs):
 def setup_setting_files(seed_0, n_seeds, max_iter):
     od = dict([
         ('T', 120),
-        ('N', 32),
-        ('eps', 1.),
+        ('N', 50),
+        ('eps', 1e-1),
         ('lam', 0.9906),
         ('max_iter', max_iter),
         ('time_limit', 3600),
@@ -43,6 +43,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
 
     mode_seed_arr = [(int(utils.Mode.INF_EDDP), 0), (int(utils.Mode.CE_INF_EDDP), 0), (int(utils.Mode.GAP_INF_EDDP), 0)] 
     mode_seed_arr += list((int(utils.Mode.INF_SDDP), i)  for i in range(n_seeds))
+    mode_seed_arr += [(int(utils.Mode.INF_INF_EDDP), 0)]
     prob_name_arr = ['hydro']
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
@@ -55,10 +56,10 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
     exp_metadata = ["Exp id", "prob_name", "mode", "alg_seed"]
-    row_format ="{:>10}|{:>10}|{:>10}|{:>10}"
+    row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
     print("")
     print(row_format.format(*exp_metadata))
-    print("-" * (len(exp_metadata)*10+len(exp_metadata)-1))
+    print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
 
     ct = 0
     for (prob_name, (mode, alg_seed)) in itertools.product(prob_name_arr, mode_seed_arr):

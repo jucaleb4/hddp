@@ -1,5 +1,4 @@
 from hddp import eddp
-from hddp import opt_setup
 
 # import gurobipy as gp
 import numpy as np
@@ -383,16 +382,6 @@ def main():
     else:
         print("invalid problem id {}".format(args.prob))
 
-def get_problem(settings):
-    if settings['prob_name'] == 'hydro':
-        return opt_setup.create_hydro_thermal_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
-    elif settings['prob_name'] == 'portfolio':
-        pass
-    elif settings['prob_name'] == 'inventory':
-        pass
-    else:
-        raise Exception("Unknown prob_name %s" % settings['prob_name'])
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--settings", type=str, required=True)
@@ -406,8 +395,9 @@ if __name__ == '__main__':
             print(exc)
             exit(0)
 
-    solver_arr = [None]*args.n_procs
-    for i in range(len(solver_arr)):
-        solver_arr[i], x_0 = get_problem(settings) 
+    # solver_arr = [None]*args.n_procs
+    # for i in range(len(solver_arr)):
+    #     solver_arr[i], x_0 = get_problem(settings) 
 
-    eddp.HDDP_multiproc(x_0, settings, solver_arr, args.n_procs)
+    # eddp.HDDP_multiproc(x_0, settings, solver_arr, args.n_procs)
+    eddp.HDDP_multiproc(settings, args.n_procs)

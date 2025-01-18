@@ -23,13 +23,14 @@ class Mode(IntEnum):
     CE_INF_EDDP = 1
     GAP_INF_EDDP = 2
     INF_SDDP = 3
+    INF_INF_EDDP = 4
 
 class SaturatedSet:
 
     def __init__(self, n, x_lb_arr, x_ub_arr, eps, T, **kwargs):
         self.dim = n
-        self.x_lb_arr = x_lb_arr
-        self.x_ub_arr = x_ub_arr
+        self.x_lb_arr = np.array(x_lb_arr)
+        self.x_ub_arr = np.array(x_ub_arr)
 
         self.x_range_arr = self.x_ub_arr - self.x_lb_arr # max width of domain
         assert np.amin(self.x_range_arr) > 0
