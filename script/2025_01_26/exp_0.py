@@ -9,8 +9,8 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 49
-DATE = "2025_01_15"
+MAX_RUNS = 300
+DATE = "2025_01_26"
 EXP_ID  = 0
 
 def parse_sub_runs(sub_runs):
@@ -30,57 +30,48 @@ def parse_sub_runs(sub_runs):
 def setup_setting_files(seed_0, n_seeds, max_iter):
     od = dict([
         ('T', 128),
+        ('eval_T', 10*128),
         ('N', 50),
-        ('eps', 1e-3),
         ('lam', 0.9906),
+        ('eps', 1e-3),
         ('max_iter', max_iter),
         ('time_limit', 7200),
         ('prob_seed', seed_0),
         ('alg_seed', seed_0),
-        ('mode', int(utils.Mode.INF_EDDP)),
+        ('mode', int(utils.Mode.EDDP)),
         ('prob_name', 'hydro'),
     ])
 
-    lam_n_iter_arr = [(0.9906, max_iter, 128), (0.8, max_iter//2, 24)]
-    mode_seed_arr = [(int(utils.Mode.INF_EDDP), 0), (int(utils.Mode.CE_INF_EDDP), 0), (int(utils.Mode.GAP_INF_EDDP), 0)] 
-    mode_seed_arr += list((int(utils.Mode.INF_SDDP), i)  for i in range(n_seeds))
-    mode_seed_arr += [(int(utils.Mode.EDDP), 0)]
-    mode_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), 0)] # only for lam=0.8
-    mode_seed_arr += list((int(utils.Mode.SDDP), i)  for i in range(n_seeds))
-    prob_name_arr = ['hydro']
+    name_run_id_arr = [("Inf-EDDP", 0), ("CE-Inf-EDDP", 1), ("Gap-Inf-EDDP", 2), ("Inf-SDDP(0)",3), ("SDDP(0)", 14)]
+    prob_date_arr = [('hydro', '2025_01_15'), ('inventory', '2025_01_16')]
+    prob_seed_N_arr = [(seed_0, 128)] + [(seed_0+i, od['T']*2) for i in range(1,30)]
 
-    log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
 
-    if not(os.path.exists(log_folder_base)):
-        os.makedirs(log_folder_base)
     if not(os.path.exists(setting_folder_base)):
         os.makedirs(setting_folder_base)
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "prob_name", "lam", "mode", "alg_seed"]
+    exp_metadata = ["Exp id", "mode", "prob", "prob_seed"]
     row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
     print("")
+    print("About: In- and out-of-sample performance on inventory and hydro on gamma=0.9906. Out of sample is repeated 30 times. \n")
     print(row_format.format(*exp_metadata))
     print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
 
     ct = 0
-    for (prob_name, (lam, n_iter, T), (mode, alg_seed)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_arr):
-        od["prob_name"] = prob_name
-        od["lam"] = lam
-        od["max_iter"] = n_iter
-        od["T"] = T
-        od["mode"] = mode
-        od["alg_seed"] = alg_seed
-        od["eval_T"] = 10*T
-
-        if lam > 0.8 and mode == utils.Mode.GCE_INF_EDDP:
-            continue
+    for ((name, run_id), (prob_name, date), (prob_seed, N)) in itertools.product(name_run_id_arr, prob_date_arr, prob_seed_N_arr):
+        od['prob_name'] = prob_name
+        od['prob_seed'] = prob_seed
+        od['N'] = N
+        od['eval_fname'] = "eval_seed=%d.csv" % prob_seed
 
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
-        od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
+        log_folder_base = os.path.join("logs", date, "exp_0")
+        od["log_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
+        assert os.path.exists(log_folder_base), "Folder %s does not exist, cannot run evaluation" % log_folder_base
 
-        print(row_format.format(ct, od["prob_name"], od["lam"], od["mode"], od["alg_seed"]))
+        print(row_format.format(ct, name, prob_name, prob_seed))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
@@ -106,8 +97,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     seed_0 = 0
-    n_seeds = 10
-    max_iters = 10 if args.work else 2_000
+    n_seeds = 1
+    max_iters = 10 if args.work else 50_000
 
     if args.setup:
         setup_setting_files(seed_0, n_seeds, max_iters)
@@ -118,6 +109,6 @@ if __name__ == "__main__":
         for i in range(start_run_id, end_run_id):
             settings_file = os.path.join(folder_name, "run_%i.yaml" % i)
             os.system('echo "Running exp id %d"' % i)
-            os.system("python main.py --settings %s" % settings_file) 
+            os.system("python main.py --settings %s --eval" % settings_file)
     else:
         print("Neither setup nor run passed. Shutting down...")
