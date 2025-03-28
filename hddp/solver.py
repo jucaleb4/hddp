@@ -267,65 +267,39 @@ class GurobiSolver(GenericSolver):
 
 class PDSASolverForLPs(GenericSolver):
     """ 
-    Primal dual stochastic approximation solver for solving the stochastic
-    LP
-    \[
-        \min c.x + lam uV(x) + E[ v_2(x) ] s.t. x \in X(u)
-        s.t. X(u) := {x : Ax-Bu-b=0, x_i >= 0 for i \in I},
-    \]
-    where $uV$ is a piecewise linear function and $v_2(z)$ is a blackbox where
-    one can obtain approximate/exact optimal value, primal, and dual variable
-    by calling @subproblem_solver.solve(), and $I$ is a subset of indices that
-    need projection (defined by @primal_projection_var_idxs). We reformulate
-    the LP to a saddle point problem
-    \[
-        \min_x \max_y c.x + <y, Ax - Bu - b> + lam * uV(x) + E[ v_2(x) ]
-        s.t. x_i >= i \in I,
-    \]
-    which is a solved by a primal-dual stochastic approximation method. 
+    Primal dual stochastic approximation solver for solving 2-stage SP.
 
-    :params A: Constraint matrix for primal variable
-    :params b: Initial RHS vector
-    :params c: Cost vector
-    :params lam: discount factor
-    :params subproblem_solver: subproblem solver that given an input @x,
-                               returns the approximate/optimal value, primal,
-                               and dual variable
-    :params scenarios: RHS from SAA problem
-    :params primal_var_idx_to_return: which primal variables correspond to state variables
-    :params subprob_var_idx_list: list of np.ndarray of indices subproblem corresponds to
-    :params primal_projection_var_idxs: Projection onto non-negative orthodant 
-    :params dummy_cons_idx: constraints corresponding to past state variable (dummy vars)
-    :params rand_rhs_idx: constraint indices w.r.t. random variables
-    :params h_min_val: lower bound on cost to go: lower bound for cost to go function
-    :params max_val: upper bound on cost to go: upper bound for cost to go function
-    :params seed: seed for random scenario selector
-    :params warm_start_x: warm start primal solution
+    :params lam: discount factor (for ctg)
+    :params (c1,A1,b1,B2): data for (min c'x : A1x + B2u [sense1_arr]  b1)
+    :params (lb1_arr,ub1_arr): lower and upper bounds on x
+    :params sense1_arr: constraint sense (=, >=, <=)
+    :params scenarios: 2d array, where i-th row is for scenario i
+    :params rand_idx_arr: subset of rhs rows corresponding to data in scenario
+    :params (B2, lb2_arr, ub2_arr, sense2_arr): similar to stage 1
+    :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
+    :params k1,k2: number of iterations to run for first stage and second stage
+    :params eta1_scale, tau1_scale: step size scaling factor for stage 1
+    :params eta2_scale: (also tau2_scale) step size scaling factor for stage 2
+    :params warm_start_x: warm-start next solve with previous solve's x approx sol'n
     """
-    def __init__(
-            self, 
-            model: Any,
-            var_names: Any,
-            A: np.ndarray,
-            b: np.ndarray,
-            c: np.ndarray,
-            lam: float,
-            subproblem_solver: GenericSolver, 
-            scenarios: np.ndarray,
-            primal_var_idx_to_return: np.ndarray,
-            subprob_var_idx_list: list,
-            primal_projection_var_idxs: np.ndarray,
-            dummy_cons_idx: np.ndarray,
-            rand_rhs_idx: np.ndarray,
-            h_min_val: float,
-            max_val: Optional[float]=None,
-            seed: Optional[int]=None,
-            warm_start_x: Optional[np.ndarray]=None,
-            gsolver=None # Gurobi solver
+    def __init__(self, 
+            lam, c1, A1, b1, B1, lb1_arr, ub1_arr, sense1_arr, scenarios, rand_idx_arr # first-stage
+            B2, lb2_arr, ub2_arr, sense2_arr, get_stochastic_lp2_params, # second-stage
+            k1, k2, eta1_scale, tau1_scale, eta2_scale, warm_start_x=False, # hyperparameters
     ): 
-        self.model = model.copy()
-        self.var_names = var_names
-        self.gsolver = gsolver
+        # learn some parameters
+        M2 = -np.inf
+        oB2 = np.max(la.svd(B2, compute_uv=False))
+        uA2 = np.inf
+        for i in range(10):
+            (c2,A2,_) = get_stochastic_lp2_params()
+            uA2 = min(np.min(la.svd(A2, compute_uv=False)), uA2)
+            M2  = max(M2, 2*la.norm(c2))
+        if uA2 < 1e-2:
+            print("uA2 is small (%.4e), manually increasing to 1e-2)" % uA2)
+            uA2 = 1e-2
+        Omega_1 = ...
+        Omega_2 = ...
 
         self.A = A
         self.b = b
@@ -397,8 +371,11 @@ class PDSASolverForLPs(GenericSolver):
         :returns subgrad: computed subgradient w.r.t. last state variable
         """
         # Do not warm start
-        x = np.zeros(len(self.prev_x[self.i]))# self.prev_x[self.i] 
-        # x = self.prev_x[ver]
+        if self.warm_start:
+            x = self.prev_x[self.i] 
+        else:
+            x = np.zeros(len(self.prev_x[self.i]))
+
         y = np.zeros(self.A.shape[0]) 
         y_prev = y.copy()
         sumx = np.zeros(len(x))
@@ -520,10 +497,11 @@ class LowerBoundModel:
         self.is_bounded = False
 
         # Gurobi naming conventions is different for n=1
-        if n == 1:
-            self.model.addConstr(self.x == np.zeros(n), name="dummy[0]")
-        else:
-            self.model.addConstr(self.x == np.zeros(n), name="dummy")
+        # if n == 1:
+        #     self.model.addConstr(self.x == np.zeros(n), name="dummy[0]")
+        # else:
+        #     self.model.addConstr(self.x == np.zeros(n), name="dummy")
+        self.model.addConstr(self.x == np.zeros(n), name="dummy")
 
         if initial_lb is not None:
             self.model.addConstr(self.t >= initial_lb, name="initial_lb")

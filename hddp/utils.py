@@ -2,28 +2,33 @@ import os
 import numpy as np
 from enum import IntEnum
 
-def save_logs(folder, total_time_arr, fwd_time_arr, select_time_arr, 
-              eval_time_arr, comm_time_arr, lb_arr, ub_arr):
+def save_logs(folder, k, total_time_arr, fwd_time_arr, select_time_arr, 
+              eval_time_arr, comm_time_arr, lb_arr, ub_arr, scen_arr):
 
-    all_times_arr = np.zeros((len(total_time_arr), 5), dtype=float)
-    all_times_arr[:,0] = total_time_arr
-    all_times_arr[:,1] = fwd_time_arr
-    all_times_arr[:,2] = select_time_arr
-    all_times_arr[:,3] = eval_time_arr
-    all_times_arr[:,4] = comm_time_arr
+    all_times_arr = np.zeros((k, 5), dtype=float)
+    all_times_arr[:,0] = total_time_arr[:k]
+    all_times_arr[:,1] = fwd_time_arr[:k]
+    all_times_arr[:,2] = select_time_arr[:k]
+    all_times_arr[:,3] = eval_time_arr[:k]
+    all_times_arr[:,4] = comm_time_arr[:k]
     fname = os.path.join(folder, "elpsed_times.csv")
     np.savetxt(fname, all_times_arr, delimiter=',', header='total_time,fwd_time,select_time,eval_time,comm_time')
 
-    all_bounds_arr = np.hstack((np.atleast_2d(lb_arr).T, np.atleast_2d(ub_arr).T))
+    all_bounds_arr = np.hstack((np.atleast_2d(lb_arr[:k]).T, np.atleast_2d(ub_arr[:k]).T))
     fname = os.path.join(folder, "bounds.csv")
     np.savetxt(fname, all_bounds_arr, delimiter=',', header='lower,upper')
+
+    fname = os.path.join(folder, "scenarios.csv")
+    np.savetxt(fname, np.atleast_2d(scen_arr[:k]).T, delimiter=',', header='lower,upper')
 
 class Mode(IntEnum):
     INF_EDDP = 0
     CE_INF_EDDP = 1
     GAP_INF_EDDP = 2
     INF_SDDP = 3
-    INF_INF_EDDP = 4
+    EDDP = 4
+    GCE_INF_EDDP = 5
+    SDDP = 6
 
 class SaturatedSet:
 
