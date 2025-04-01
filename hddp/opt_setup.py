@@ -5,6 +5,8 @@ import numpy.linalg as la
 import pandas
 import time
 import re
+import sys
+print(sys.path)
 from hddp import solver
 
 from typing import Tuple, Any
@@ -260,7 +262,7 @@ def get_gurobi_var_name_idx(mdl, key):
 def get_gurobi_constr_name_idx(mdl, key):
     name_arr = [constr.ConstrName for (idx, constr) in enumerate(mdl.getConstrs()) if (key in constr.ConstrName)]
     idx_arr = [idx for (idx, constr) in enumerate(mdl.getConstrs()) if (key in constr.ConstrName)]
-    return name_arr, idx_arr
+    return name_arr, np.array(idx_arr, dtype=int)
 
 def get_cAb_model(mdl):
     A = mdl.getA().todense()
@@ -282,141 +284,195 @@ def test_gurobi_var_val(mdl, idx_arr, val_arr):
     assert la.norm(val_arr-var_arr)/(1e-8 + min(la.norm(val_arr), la.norm(var_arr))) <= 1e-12, "val_arr=%s and var_arr=%s are not equal" % (val_arr, var_arr)
 
 def create_hierarchical_inventory_gurobi_model(
-        N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, warm_start_x=False, has_ctg=True
+        N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg=True, 
+        sa_eval=False, saa_eval=False, N2=0, **kwargs,
     ):
-    """ Creates basic hierarchical inventory problem """
+    """ Creates basic hierarchical inventory problem 
 
-    n = 4 # number of high-level items
-    m = 6 # number of lower-level distributors
+    See solver:PDSASolverForLPs for more details on some of the hyperparameters.
 
-    # for testing
-    is_rnd = 1
-    if not is_rnd:
-        n = m = 2
-        seed = 0
+    :param N: scenario count
+    :param lam: discount factor
+    :param seed: seeding for random scenarios
+    """
+
+    n = 2 # number of items with demand
+    m = 3 # number of parts
 
     rng = np.random.default_rng(seed)
-    c_arr = 1 + np.cos(np.pi/3) + is_rnd*rng.random(size=n)
-    b_arr = 2.3 + is_rnd*rng.random(size=n)
-    h_arr = 0.1 + is_rnd*0.2*rng.uniform(size=n)
+    c_arr = 1 + np.cos(np.pi/3) + rng.random(size=n)
+    b_arr = 2.3 + rng.random(size=n)
+    h_arr = 0.1 + 0.2*rng.uniform(size=n)
     phi = 1.6
     scenarios = np.zeros((N+1,n), dtype=float)
     scenarios[0] = np.arange(9,9+n)
-    scenarios[1:,:] = (5.5 + is_rnd*10*phi*rng.uniform(size=(N,n)))
+    scenarios[1:,:] = (5.5 + 10*phi*rng.uniform(size=(N,n)))
+    a_costs = 5 * rng.uniform(size=m)
 
     # first stage
     mdl = gp.Model()
-    x_t = mdl.addMVar(n, lb=0, ub=50, name="state")
+    y_t = mdl.addMVar(n, lb=-25, ub=50, name="state")
     u_t = mdl.addMVar(n, lb=0, ub=50, name="ctrl")
-    y_t = mdl.addMVar(n, lb=-25, ub=50, name="next")
-    z_t = mdl.addMVar(n, lb=0, ub=50)
-    mdl.addConstr(x_t - (y_t + u_t) == 0)
-    mdl.addConstr(z_t - y_t == 0, name="rand")
+    o_t = mdl.addMVar(m, lb=0, ub=50, name="order")
+    z_t = mdl.addMVar(n, lb=-25, ub=50, name="aux") # dummy variable for previous stage
+    mdl.addConstr(-y_t + z_t + u_t == 0, name="rand")
     mdl.addConstr(z_t == 0, name="dummy")
-    mdl.setObjective(c_arr@u_t, gp.GRB.MINIMIZE)
-    x_0 = 5*rng.uniform(size=n)
+    mdl.setObjective(a_costs@o_t + c_arr@u_t, gp.GRB.MINIMIZE)
     mdl.update()
-    (c,A,rhs,sense_arr,lb_arr,ub_arr) = get_cAb_model(mdl)
+
+    (c,A,b,sense_arr,x_lb_arr,x_ub_arr) = get_cAb_model(mdl)
+    x_bnd_arr = np.vstack((x_lb_arr, x_ub_arr))
+    _, state_idx_arr = get_gurobi_var_name_idx(mdl, "state")
+    _, order_idx_arr = get_gurobi_var_name_idx(mdl, "order")
+    _, aux_idx_arr = get_gurobi_var_name_idx(mdl, "aux")
     _, dummy_idx_arr = get_gurobi_constr_name_idx(mdl, "dummy")
     _, rand_constr_idx_arr = get_gurobi_constr_name_idx(mdl, "rand") 
     B = np.zeros((A.shape[0], n), dtype=float)
+    # in PDSA, constraints are Ax+Bu-b=0, so leave it as negative identity
     B[dummy_idx_arr,:] = -np.eye(n)
-
-    if not is_rnd:
-        rhs[rand_constr_idx_arr] = scenarios[0]
-        test_mdl = gp.Model()
-        x = test_mdl.addMVar(len(lb_arr), lb=lb_arr, ub=ub_arr, obj=c)
-        x_prev = np.ones(2)
-        for i in range(len(rhs)):
-            if sense_arr[i] == '=':
-                test_mdl.addConstr(A[i]@x + B[i]@x_prev == rhs[i])
-            elif sense_arr[i] == '>':
-                test_mdl.addConstr(A[i]@x + B[i]@x_prev >= rhs[i])
-            else:
-                test_mdl.addConstr(A[i]@x + B[i]@x_prev <= rhs[i])
-        _, state_idx_arr = get_gurobi_var_name_idx(mdl, "state") 
-        test_mdl.addConstr(x[state_idx_arr] >= 1.5)
-        test_mdl.update()
-        test_mdl.optimize()
-        test_gurobi_model_cost(test_mdl, 30.)
-        _, ctrl_var_idx_arr = get_gurobi_var_name_idx(mdl, "ctrl") 
-        test_gurobi_var_val(test_mdl, ctrl_var_idx_arr, [9.5,10.5])
 
     # second stage 
     mdl2 = gp.Model()
-    p = mdl2.addMVar(n, lb=0, ub=50, name="parts")
-    s = mdl2.addMVar(n, lb=0, ub=25, name="slack")
-    x = mdl2.addMVar(n, lb=-25, ub=50)
-    v = mdl2.addMVar(m, lb=0, ub=50, name="prods")
-    mdl2.addConstrs((p[i] == x[i] + s[i] + gp.quicksum(v) for i in range(n)), name="convert")
-    mdl2.addConstr(x == 0, name="dummy")
-    mdl2.addConstr(v <= 0, name="rand")
-    mdl2.setObjective(gp.quicksum(v) + gp.quicksum(p) + gp.quicksum(s)) 
+    l = mdl2.addMVar(n, lb=0, ub=50, name="left")
+    x_pos = mdl2.addMVar(n, lb=0, ub=50, name="x_pos")
+    x_neg = mdl2.addMVar(n, lb=0, ub=50, name="x_neg")
+    p = mdl2.addMVar(n, lb=0, ub=1000, name="p_var")
+    q = mdl2.addMVar(m, lb=0, ub=1000, name="q_var")
+    f = mdl2.addMVar(m, lb=0, ub=50, name="f")   # dummy for o
+    y = mdl2.addMVar(n, lb=-25, ub=50, name="y") # dummy for z
+    mdl2.addConstrs((q[i] - f[i] + gp.quicksum(p) == 0 for i in range(m)), name="convert")
+    mdl2.addConstr(x_pos - x_neg - y == 0, name="rand")
+    mdl2.addConstr(f == 0, name="dummy_o")
+    mdl2.addConstr(y == 0, name="dummy_z")
+    mdl2.addConstr(l == x_neg - p)
+    mdl2.setObjective(gp.quicksum(p) + gp.quicksum(q) + gp.quicksum(l) + gp.quicksum(x_pos)) 
     mdl2.update()
-    (c2,A2,rhs2,sense2_arr,lb2_arr,ub2_arr) = get_cAb_model(mdl2)
+
+    (c2,A2,b2,sense2_arr,x2_lb_arr,x2_ub_arr) = get_cAb_model(mdl2)
+    x2_bnd_arr = np.vstack((x2_lb_arr, x2_ub_arr))
     n_prev = len(mdl.getVars())
     B2 = np.zeros((A2.shape[0], n_prev), dtype=float)
-    _, dummy_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy")
-    _, next_idx_arr  = get_gurobi_var_name_idx(mdl, "next")
-    B2[dummy_idx_arr,next_idx_arr] = -np.ones(len(next_idx_arr))
+    _, dummy_o_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy_o")
+    _, dummy_z_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy_z")
+    B2[np.ix_(dummy_o_idx_arr,order_idx_arr)] = -np.eye(m)
+    B2[np.ix_(dummy_z_idx_arr,aux_idx_arr)] = -np.eye(n)
 
     # get columns of random components
-    _, p_var_idx = get_gurobi_var_name_idx(mdl2, "parts")
-    _, s_var_idx = get_gurobi_var_name_idx(mdl2, "slack")
-    _, v_var_idx = get_gurobi_var_name_idx(mdl2, "prods")
+    _, p_var_idx = get_gurobi_var_name_idx(mdl2, "p_var")
+    _, q_var_idx = get_gurobi_var_name_idx(mdl2, "q_var")
+    _, l_var_idx = get_gurobi_var_name_idx(mdl2, "left")
+    _, x_pos_var_idx = get_gurobi_var_name_idx(mdl2, "x_pos")
     _, convert_constr_idx = get_gurobi_constr_name_idx(mdl2, "convert")
-    v_var_idx = np.array(v_var_idx)
-    convert_constr_idx = np.array(convert_constr_idx)
-    _, rand_constr_idx = get_gurobi_constr_name_idx(mdl2, "rand")
-    mu = -0.5*np.ones(m)
-    L  = rng.normal(size=(m,m))
-    Sig = L@L.T
-    def get_stochastic_lp_params():
-        tmp = rng.multivariate_normal(mean=mu, cov=Sig) if is_rnd else mu
-        c2[v_var_idx] = l = np.minimum(9, np.maximum(-10, tmp))
-        c2[p_var_idx] = h = 0.1 + is_rnd*0.2*rng.uniform(size=n)
-        c2[s_var_idx] = b = 10 + is_rnd*5*rng.uniform(size=n)
+    _, rand2_constr_idx_arr = get_gurobi_constr_name_idx(mdl2, "rand")
+    mu = np.ones(n)
+    L_m  = rng.normal(size=(m,m))
+    L_n  = rng.normal(size=(n,n))
+    Sig_m = L_m@L_m.T
+    Sig_n = 0.1*L_n@L_n.T
+    def get_stochastic_lp2_params(i):
+        tmp_n = rng.multivariate_normal(mean=mu, cov=Sig_n) 
+        tmp_m = rng.multivariate_normal(mean=np.sqrt(a_costs), cov=Sig_m) 
+        m,n = len(tmp_m), len(tmp_n)
+        c2[p_var_idx] = np.maximum(-1, tmp_n)
+        c2[q_var_idx] = -np.minimum(a_costs, tmp_m)
+        c2[l_var_idx]     = 10 + 5*rng.uniform(size=n)    # b
+        c2[x_pos_var_idx] = 0.1 + 0.2*rng.uniform(size=n) # h
 
-        a1 = rng.binomial(n=1,p=1./(m+n),size=(len(convert_constr_idx), len(v_var_idx)))
-        a2 = 2./m*rng.uniform(size=a1.shape)
+        a1 = rng.binomial(n=1, p=1./(n),size=(m,n))
+        a2 = 2./n*rng.uniform(size=a1.shape)
         # https://stackoverflow.com/questions/22927181/selecting-specific-rows-and-columns-from-numpy-array
-        A2[np.ix_(convert_constr_idx,v_var_idx)] = -np.multiply(a1,a2) if is_rnd else -1./m*np.ones(a2.shape)
-        A2[convert_constr_idx,v_var_idx[:n]] = -1./m
+        A2[np.ix_(convert_constr_idx,p_var_idx)] = np.multiply(a1,a2) 
 
-        rhs2[rand_constr_idx] = d = np.minimum(50, rng.poisson(5, size=m)) if is_rnd else 5
-        return (c2, A2, rhs2)
+        b2[rand2_constr_idx_arr] = scenarios[i]
+        return (c2, np.asarray(A2), b2)
 
-    if not is_rnd:
-        test_mdl = gp.Model()
-        (c2, A2, rhs2) = get_stochastic_lp_params()
-        x = test_mdl.addMVar(len(lb2_arr), lb=lb2_arr, ub=ub2_arr, obj=c2)
-        y_t = rng.uniform(size=len(mdl.getVars()))
-        y_t[next_idx_arr] = np.array([1,-1])
-        for i in range(len(rhs2)):
-            if sense2_arr[i] == '=':
-                test_mdl.addConstr(A2[i]@x + B2[i]@y_t == rhs2[i])
-            elif sense2_arr[i] == '>':
-                test_mdl.addConstr(A2[i]@x + B2[i]@y_t >= rhs2[i])
-            else:
-                test_mdl.addConstr(A2[i]@x + B2[i]@y_t <= rhs2[i])
-        test_mdl.update()
-        test_mdl.optimize()
-        test_gurobi_model_cost(test_mdl, -4.)
-        _, parts_var_idx_arr = get_gurobi_var_name_idx(mdl2, "parts") 
-        _, prods_var_idx_arr = get_gurobi_var_name_idx(mdl2, "prods") 
-        _, slack_var_idx_arr = get_gurobi_var_name_idx(mdl2, "slack") 
-        test_gurobi_var_val(test_mdl, parts_var_idx_arr, [6,4])
-        test_gurobi_var_val(test_mdl, prods_var_idx_arr, [5,5])
-        test_gurobi_var_val(test_mdl, slack_var_idx_arr, [0,0])
+    if sa_eval:
+        hier_inv_solver = solver.PDSAEvalSA(
+            lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, seed, N2,
+        )
+    elif saa_eval:
+        raise NotImplementedError
+        # hier_inv_solver = solver.PDSAEvalSAA(
+        #     lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
+        #     get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, N2,
+        # )
+    else:
+        hier_inv_solver = solver.PDSASolverForLPs(
+            lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr,
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, 
+            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg,
+        )
 
-    hier_inv_solver = solver.PDSASolverForLPs(
-        lam, c, A, b, B, lb_arr, ub_arr, sense_arr, scenarios, rand_idx_arr,
-        B2, lb2_arr, ub2_arr, sense2_arr, get_stochastic_lp_params, 
-        k1, k2, eta1_scale, tau1_scale, eta2_scale, warm_start_x,
-    )
-    x_0 = rng.uniform(n)
+    x_0 = 50*rng.uniform(size=n)
 
     return hier_inv_solver, x_0
 
-if __name__ == '__main__':
-    create_hierarchical_inventory_gurobi_model(10, 0.9, 0)
+def create_hierarchical_test_gurobi_model(
+        N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, 
+        warm_start=False, has_ctg=True
+    ):
+    """ Basic test case for solving deterministic problem
+
+        min x-2y
+        s.t x>=0
+            x<=10
+            y<=x
+            y<=5
+            y>=0
+
+    where we view `x` as the first-stage decision and `y` as the second stage
+    decision. Without `y`, then `x` will be minimize itself at `x=0`. However,
+    the optimal solution is `(x*,y*)=(5,5)`. The upper bound on `x` and lower
+    bound on `y` is to ensure boundedness.
+
+    See solver:PDSASolverForLPs for more details on some of the hyperparameters.
+
+    :param N: scenario count
+    :param lam: discount factor
+    :param seed: seeding for random scenarios
+    :param has_ctg: include cost-to-go function in two-stage subproblem
+    """
+
+    n = 1 # number of high-level items
+
+    rng = np.random.default_rng(seed)
+    x_ub = 10
+    scenarios = x_ub*np.ones((N+1,n), dtype=float)
+
+    # first stage
+    mdl = gp.Model()
+    x_t = mdl.addVar(lb=0, ub=10, name="state")
+    mdl.addConstr(x_t <= -1, name="rand")
+    mdl.setObjective(x_t, gp.GRB.MINIMIZE)
+    x_0 = rng.uniform(size=n)
+    mdl.update()
+
+    (c,A,b,sense_arr,x_lb_arr,x_ub_arr) = get_cAb_model(mdl)
+    x_bnd_arr = np.vstack((x_lb_arr, x_ub_arr))
+    _, state_idx_arr = get_gurobi_var_name_idx(mdl, "state")
+    _, rand_constr_idx_arr = get_gurobi_constr_name_idx(mdl, "rand") 
+    B = np.zeros((A.shape[0], n), dtype=float)
+
+    # second stage. Vars are (y,z) where z=u (previous stage)
+    c2 = np.array([-2,0])
+    A2 = np.array(
+        [[1,0],
+         [1,-1],
+         [0,1]])
+    b2 = np.array([5,0,0], dtype=float)
+    B2 = np.zeros((A2.shape[0], 1), dtype=float); B2[-1,0] = -1
+    x2_bnd_arr = np.array([[0,5],[0,10]]).T
+    sense2_arr = ["<", "<", "="]
+
+    def get_stochastic_lp2_params():
+        return (c2, A2, b2)
+
+    hier_inv_solver = solver.PDSASolverForLPs(
+        lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, 
+        get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, 
+        k1, k2, eta1_scale, tau1_scale, eta2_scale, warm_start,
+    )
+    x_0 = rng.uniform(size=n)
+
+    return hier_inv_solver, x_0
