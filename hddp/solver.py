@@ -3,9 +3,19 @@ import gurobipy as gp
 import re
 import os
 import numpy.linalg as la
+import time
 
 from abc import ABC, abstractmethod
 from typing import Tuple, Any, Optional
+
+def get_dual_proj_bounds_from_sense(sense):
+    dt_lb = {"=": -np.inf, ">": -np.inf, "<": 0}
+    dt_ub = {"=": np.inf, ">": 0, "<": np.inf}
+    # dt_lb = {"=": -np.inf, "<": -np.inf, ">": 0}
+    # dt_ub = {"=": np.inf, "<": 0, ">": np.inf}
+    lb_arr = np.array([dt_lb[s] for s in sense])
+    ub_arr = np.array([dt_ub[s] for s in sense])
+    return lb_arr, ub_arr
 
 class GenericSolver(ABC):
     """
@@ -33,6 +43,8 @@ class GenericSolver(ABC):
         self.val_arr = np.zeros(m, dtype=float)
         self.grad_arr = np.zeros((m,n), dtype=float)
         self.x_prev_arr = np.zeros((m,n), dtype=float)
+        self.time_arr = np.zeros(m, dtype=float)
+        self.s_time = time.time()
     
     @abstractmethod
     def solve(self, x_prev: np.ndarray, scenario_id: int) \
@@ -52,26 +64,35 @@ class GenericSolver(ABC):
     def add_cut(self, val, grad, x_prev) -> None:
         raise NotImplementedError
 
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr) -> None:
+        """ Loads multiple cuts at once. """
+        self.val_arr = val_arr
+        self.grad_arr = grad_arr
+        self.x_prev_arr = x_prev_arr
+        self.ct = len(self.x_prev_arr)
+        self.time_arr = np.zeros(self.ct)
+
     def save_cut(self, val, grad, x_prev) -> None:
         """ Adds cut to cost-to-go function, in the form of
-        \[
-            l_f(x) := val + <grad, x - x_prev>
-        \]
+              l_f(x) := val + <grad, x - x_prev>
         """
-        self.val_arr[self.ct] = val
-        self.grad_arr[self.ct] = grad
-        self.x_prev_arr[self.ct] = x_prev
-        self.ct += 1
-
         if self.ct == len(self.val_arr):
             self.val_arr = np.append(self.val_arr, np.zeros(self.val_arr.shape, dtype=float))
             self.grad_arr = np.vstack((self.grad_arr, np.zeros(self.grad_arr.shape, dtype=float)))
             self.x_prev_arr = np.vstack((self.x_prev_arr, np.zeros(self.x_prev_arr.shape, dtype=float)))
+            self.time_arr = np.append(self.time_arr, np.zeros(self.val_arr.shape, dtype=float))
+
+        self.val_arr[self.ct] = val
+        self.grad_arr[self.ct] = grad
+        self.x_prev_arr[self.ct] = x_prev
+        self.time_arr[self.ct] = time.time() - self.s_time
+        self.ct += 1
 
     def save_cuts_to_file(self, folder):
         np.savetxt(os.path.join(folder, "vals.csv"), self.val_arr[:self.ct], delimiter=',')
         np.savetxt(os.path.join(folder, "grad.csv"), self.grad_arr[:self.ct], delimiter=',')
         np.savetxt(os.path.join(folder, "x_prev.csv"), self.x_prev_arr[:self.ct], delimiter=',')
+        np.savetxt(os.path.join(folder, "time.csv"), self.time_arr[:self.ct], delimiter=',')
 
     def get_scenarios(self):
         raise NotImplementedError
@@ -103,6 +124,9 @@ class EmptySolver(GenericSolver):
         return np.zeros(self.n), 0, np.zeros(self.n), 0
 
     def add_cut(self, val, grad, x_prev):
+        pass
+
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr):
         pass
 
 class GurobiSolver(GenericSolver):
@@ -265,6 +289,12 @@ class GurobiSolver(GenericSolver):
         self.save_cut(val, grad, x_prev)
         self.model.addConstr(self.t - grad@self.x >= val-grad@x_prev)
 
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr):
+        super().load_cuts(val_arr, grad_arr, x_prev_arr)
+
+        # TODO: This may not work
+        self.model.addConstr(self.t - grad_arr@self.x >= val_arr-np.diag(grad_arr@x_prev_arr.T))
+
 class PDSASolverForLPs(GenericSolver):
     """ 
     Primal dual stochastic approximation solver for solving 2-stage SP.
@@ -274,82 +304,89 @@ class PDSASolverForLPs(GenericSolver):
     :params (lb1_arr,ub1_arr): lower and upper bounds on x
     :params sense1_arr: constraint sense (=, >=, <=)
     :params scenarios: 2d array, where i-th row is for scenario i
-    :params rand_idx_arr: subset of rhs rows corresponding to data in scenario
+    :params rand1_idx_arr: subset of rhs rows corresponding to data in scenario
     :params (B2, lb2_arr, ub2_arr, sense2_arr): similar to stage 1
     :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
     :params k1,k2: number of iterations to run for first stage and second stage
     :params eta1_scale, tau1_scale: step size scaling factor for stage 1
     :params eta2_scale: (also tau2_scale) step size scaling factor for stage 2
-    :params warm_start_x: warm-start next solve with previous solve's x approx sol'n
     """
-    def __init__(self, 
-            lam, c1, A1, b1, B1, lb1_arr, ub1_arr, sense1_arr, scenarios, rand_idx_arr # first-stage
-            B2, lb2_arr, ub2_arr, sense2_arr, get_stochastic_lp2_params, # second-stage
-            k1, k2, eta1_scale, tau1_scale, eta2_scale, warm_start_x=False, # hyperparameters
+    def __init__(self, lam,
+            c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, # first-stage
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
+            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg, # hyperparameters
     ): 
-        # learn some parameters
+        # ignore non-state variables
+        M_h = la.norm(c1)
+        x_lb_arr = x1_bnd_arr[0][state1_idx_arr]
+        x_ub_arr = x1_bnd_arr[1][state1_idx_arr]
+        super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
+
+        # save first-stage settings
+        self.A1 = np.asarray(A1)
+        self.B1 = B1
+        self.c1 = c1
+        self.b1 = b1
+        self.state1_idx_arr = state1_idx_arr
+        self.x1_bnd_arr = x1_bnd_arr
+        y_lb_arr, y_ub_arr = get_dual_proj_bounds_from_sense(sense1_arr)
+        self.y1_bnd_arr = np.vstack((y_lb_arr, y_ub_arr))
+        self.scenarios = scenarios
+        self.rand1_idx_arr = rand1_idx_arr
+        cx_bnds = np.vstack((np.multiply(c1, x1_bnd_arr[0]), np.multiply(c1, x1_bnd_arr[1])))
+
+        # setup some useful attributes
+        self.lam = lam
+        self.h_min_val = np.sum(np.min(cx_bnds, axis=0))
+        self.h_max_val = np.sum(np.max(cx_bnds, axis=0))
+
+        # save second-stage settings
+        self.get_stochastic_lp2_params = get_stochastic_lp2_params
+        self.B2 = B2
+        self.x2_bnd_arr = x2_bnd_arr
+        y2_lb_arr, y2_ub_arr = get_dual_proj_bounds_from_sense(sense2_arr)
+        self.y2_bnd_arr = np.vstack((y2_lb_arr, y2_ub_arr))
+
+        # append cost to go to cuts (and update variables)
+        self.has_ctg = has_ctg
+        if has_ctg:
+            self.A1 = np.hstack((self.A1, np.zeros((self.A1.shape[0], 1))))
+            self.c1 = np.append(self.c1, lam)
+            self.B2 = np.hstack((self.B2, np.zeros((self.B2.shape[0], 1))))
+            self.x1_bnd_arr = np.hstack((self.x1_bnd_arr, np.array([[-np.inf, np.inf]]).T))
+            self.ctg_constr_starting_idx = self.A1.shape[0]
+            self.ctg_idx = self.A1.shape[1]-1
+
+        # estimate some hyperparameters and set parameters
         M2 = -np.inf
         oB2 = np.max(la.svd(B2, compute_uv=False))
         uA2 = np.inf
         for i in range(10):
-            (c2,A2,_) = get_stochastic_lp2_params()
+            # arbitrary choose initial scenario to estimate
+            (c2,A2,_) = get_stochastic_lp2_params(0)
             uA2 = min(np.min(la.svd(A2, compute_uv=False)), uA2)
             M2  = max(M2, 2*la.norm(c2))
         if uA2 < 1e-2:
             print("uA2 is small (%.4e), manually increasing to 1e-2)" % uA2)
             uA2 = 1e-2
-        Omega_1 = ...
-        Omega_2 = ...
+        Omega_1 = np.sqrt(0.5*la.norm(x1_bnd_arr[1] - x1_bnd_arr[0])**2)
+        Omega_2 = np.sqrt(0.5*la.norm(x2_bnd_arr[1] - x2_bnd_arr[0])**2)
+        barG    = oB2*(2*M2/max(1e-1, uA2) + 2*Omega_2) # assume zero initial dual vector
 
-        self.A = A
-        self.b = b
-        self.c = c
-        self.subproblem_solver = subproblem_solver
-        self.scenarios = scenarios
-        self.primal_var_idx_to_return = primal_var_idx_to_return
-        self.subprob_var_idx_list = subprob_var_idx_list
-        self.primal_projection_var_idxs = primal_projection_var_idxs
-        self.dummy_cons_idx = dummy_cons_idx
-        self.rand_rhs_idx = rand_rhs_idx
-
-        # Initialize DS for cuts and lower bound
-        self.num_cuts = 1
-        self.cut_capacity = 16
-        self.cut_vals = np.zeros(self.cut_capacity)
-        self.cut_vals[0] = h_min_val/(1.-lam)
-        self.cut_grads = np.zeros((self.cut_capacity, len(primal_var_idx_to_return)))
-        self.lam = lam
-
-        self.rng = np.random.default_rng(seed)
-
-        if warm_start_x is not None:
-            N = len(self.scenarios)-1
-            self.prev_x = np.outer(np.ones(N+1), warm_start_x)
-            # ensure we start with a feasible solution
-            assert np.min(warm_start_x[primal_projection_var_idxs]) >= 0, "Did not warm start with feasible solution"
-        else:
-            self.prev_x = np.zeros((N+1, A.shape[1]))
-
-        # Estimate parameters
-        barG = 100
-        D_X  = 1000
-        W_norm = la.norm(A.todense(), ord=2)
-        a_X = 1
-
-        N = 50 # manually tune
-        self.n_iters = 1000 # manually tune
-        self.w = 1
-        self.theta = 1
-        self.tau = max(barG * (3*N)**0.5/D_X, 2**0.5 * W_norm)/a_X**0.5
-        self.eta = 2**0.5 * W_norm/a_X**0.5 
-
-        self.i = 0
+        self.k1 = k1
+        self.k2 = k2
+        self.eta1 = eta1_scale * np.sqrt(2)*la.norm(self.A1)
+        self.tau1 = max(self.eta1, tau1_scale*np.sqrt(6*k1*barG**2)/Omega_1)
+        # TEMP: Simpler dual stepsize
+        self.tau1 = self.eta1
+        self.eta2_scale = eta2_scale
+        self.t = 0
 
     def get_gurobi_model(self):
-        return self.model
+        return None
 
     def get_var_names(self):
-        return self.var_names
+        return []
 
     def get_scenarios(self):
         return self.scenarios
@@ -358,9 +395,9 @@ class PDSASolverForLPs(GenericSolver):
         self.i = i
 
     def get_single_stage_lbub(self) -> Tuple[float, float]:
-        return self.min_val, self.max_val
+        return self.h_min_val, self.h_max_val
 
-    def solve(self, u, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
+    def solve(self, u, ver, stage=1) -> Tuple[np.ndarray, float, np.ndarray, float]:
         """ Solves subproblem and returns approx. optimal value, primal, and
         dual variable.
 
@@ -370,115 +407,239 @@ class PDSASolverForLPs(GenericSolver):
         :returns barx: computed primal solution
         :returns subgrad: computed subgradient w.r.t. last state variable
         """
-        # Do not warm start
-        if self.warm_start:
-            x = self.prev_x[self.i] 
+        theta = 1.
+        if stage == 1:
+            A,B,c,b = self.A1, self.B1, self.c1, self.b1
+            x_bnd_arr, y_bnd_arr = self.x1_bnd_arr, self.y1_bnd_arr
+            k, eta, tau = self.k1, self.eta1, self.tau1
+            for i,j in enumerate(self.rand1_idx_arr):
+                b[j] = self.scenarios[ver][i]
+            x = np.zeros(A.shape[1])
+        elif stage == 2:
+            B = self.B2
+            c,A,b = self.get_stochastic_lp2_params(ver)
+            x_bnd_arr, y_bnd_arr = self.x2_bnd_arr, self.y2_bnd_arr
+            k = self.k2
+            tau = eta = self.eta2_scale * np.sqrt(2) * la.norm(A) # theory says tau = eta
+            x = np.zeros(A.shape[1])
+        elif stage == 3:
+            return (0, 0, 0, 0)
         else:
-            x = np.zeros(len(self.prev_x[self.i]))
+            raise Exception("Code only supports 2-stage, received %d" % stage)
 
-        y = np.zeros(self.A.shape[0]) 
+        # add dummy variable constraint
+        null_ver = 0 # no version for 2nd stage
+        b_prime = b - B@u
+        y = np.zeros(A.shape[0]) 
         y_prev = y.copy()
-        sumx = np.zeros(len(x))
-        sumy = np.zeros(len(y))
+        barx = np.zeros(len(x))
+        bary = np.zeros(len(y))
+        barval = 0.
 
-        # update RHS for (upper level) scenario
-        b = self.b
-        for i,j in enumerate(self.rand_rhs_idx):
-            b[j] = self.scenarios[ver][i]
-        for i,j in enumerate(self.dummy_cons_idx):
-            b[j] = u[i]
+        for t in range(k):
+            # get next stage's subgradient
+            [_, val_t, G_t, _] = self.solve(x, null_ver, stage+1)
 
-        # number of lower level scenarios
-        N = len(self.subproblem_solver.get_scenarios())
-
-        for k in range(self.n_iters):
-
-            # get unbiased subgradient
-            i_k = self.rng.integers(0, N)
-            [_, G_k, _] = self.get_stochastic_subgradient_of_v2(x, i_k)
-
-            d = self.theta * (y - y_prev) + y
-            x = self.primal_prox(x, d, self.c, G_k, self.tau, 
-                                 self.primal_projection_var_idxs)
+            d = y + theta * (y - y_prev) 
+            x = self.primal_prox(x, d, c, G_t, tau, x_bnd_arr, A)
             y_prev = y
-            y = self.dual_prox(y, x, b, self.eta)
+            y = self.dual_prox(y, x, b_prime, eta, y_bnd_arr, A)
 
-            sumx += self.w * x
-            sumy += self.w * y
+            alpha = 1./(t+1)
+            barx = (1.-alpha)*barx + alpha*x
+            bary = (1.-alpha)*bary + alpha*y
+            barval = (1.-alpha)*barval + alpha*val_t
 
         # compute final output
-        sumw = self.w * self.n_iters
-        barx = (1/sumw) * sumx
-        bary = (1/sumw) * sumy
+        objval = np.dot(c, barx) + barval
+        subgrad = B.T.dot(bary)
+        ctg = 0
+        if stage == 1:
+            # for 1-stage problem, we only want primal
+            if self.has_ctg:
+                ctg = barx[self.ctg_idx]
+            barx = barx[self.state1_idx_arr]
 
-        # warm start for next solve
-        self.prev_x[ver] = barx
+        return barx, objval, subgrad, ctg
 
-        subgrad = bary[self.dummy_cons_idx]
-        objval = np.dot(self.c, barx)
-        for i in range(N):
-            # evaluate the output
-            [val, _, ctg] = self.get_stochastic_subgradient_of_v2(barx, i)
-            objval += (1/N) * val
-        objval += self.lam * ctg
-
-        # _, _, ggrad, _= self.gsolver.solve(u, ver)
-
-        barx_to_return = barx[self.primal_var_idx_to_return]
-
-        return barx_to_return, objval, subgrad, ctg
-
-    def get_stochastic_subgradient_of_v2(self, x_k, i_k):
-        """ Computes stochastic subgradient, which is sum of cost to go's (with
-        a discount factor) and v2 subproblem's subgradient. Since subproblem
-        gradient and cost-to-go only corresponds to some parts of the primal
-        solution, we project onto the correct portion.
-        """
-        # gradient from subproblem
-        subprob_var_idxs = self.subprob_var_idx_list[i_k]
-        x_k_subprob_proj = x_k[subprob_var_idxs]
-        [_, val, G_k, _] = self.subproblem_solver.solve(x_k_subprob_proj, i_k)
-        grad = np.zeros(len(x_k))
-        grad[subprob_var_idxs] = G_k
-
-        # gradient from cost-to-go
-        nc = self.num_cuts
-        x_k_primal_proj = x_k[self.primal_var_idx_to_return]
-        cut_evals = self.cut_vals[:nc] \
-                    + np.dot(self.cut_grads[:nc], x_k_primal_proj)
-        tight_cut_idx = np.argmax(cut_evals)
-        ctg = cut_evals[tight_cut_idx]
-        primal_idxs = self.primal_var_idx_to_return
-        grad[primal_idxs] += self.lam * self.cut_grads[tight_cut_idx]
-
-        return val, grad, ctg
-
-    def primal_prox(self, x_prev, d, c, G_k, tau, projection_var_idxs):
-        # TODO: Transpose multiply
-        x = x_prev - (1./tau) * (G_k + c - self.A.T.dot(d))
-        if len(projection_var_idxs):
-            x[projection_var_idxs] = np.maximum(x[projection_var_idxs], 0)
+    def primal_prox(self, x_prev, d, c, G_k, tau, bnd_arr, A):
+        # Paper says to use -A'd, but I think we want A'd
+        x = x_prev - (1./tau) * (G_k + c + A.T.dot(d))
+        x = np.clip(x, bnd_arr[0], bnd_arr[1])
         return x
 
-    def dual_prox(self, y_prev, x, b, eta):
-        y = y_prev - (1./eta) * (self.A.dot(x) - b)
+    def dual_prox(self, y_prev, x, b, eta, bnd_arr, A):
+        # Paper says to use "- (1./eta) ...", but I think it should be "+ (1./eta) ..."
+        y = y_prev + (1./eta) * (A.dot(x) - b)
+        y = np.clip(y, bnd_arr[0], bnd_arr[1])
         return y
 
     def add_cut(self, val, grad, x_prev):
-        # self.gsolver.save_cut(val, grad, x_prev)
+        # add constraint 
+        #   theta >= val + <grad, x-x_prev>
+        # New cut means new constraint and a corresponding dual variable 
+        # (since >= constraint, then dual cone is < 0, or y in [-inf,0])
         self.save_cut(val, grad, x_prev)
-        self.gsolver.add_cut(val, grad, x_prev)
 
-        self.cut_vals[self.num_cuts] = val - np.dot(grad, x_prev)
-        self.cut_grads[self.num_cuts] = grad
+        new_row = np.zeros(self.A1.shape[1])
+        new_row[self.state1_idx_arr] = -grad
+        new_row[self.ctg_idx] = 1
+        self.b1 = np.append(self.b1, val - np.dot(grad, x_prev))
+        self.A1 = np.vstack((self.A1, new_row))
+        self.B1 = np.vstack((self.B1, np.zeros(self.B1.shape[1])))
+        self.y1_bnd_arr = np.hstack((self.y1_bnd_arr, np.array([[-np.inf,0]]).T))
 
-        # double capacity if full
-        self.num_cuts += 1
-        if self.num_cuts >= self.cut_capacity:
-            self.cut_vals = np.append(self.cut_vals, np.zeros(self.cut_capacity))
-            zeros_matrix = np.zeros((self.cut_capacity, len(self.primal_var_idx_to_return)))
-            self.cut_grads = np.vstack((self.cut_grads, zeros_matrix))
-            self.cut_capacity *= 2 
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr):
+        super().load_cuts(val_arr, grad_arr, x_prev_arr)
+
+        # TODO: Add to A matrix
+
+class PDSAEvalSA(GenericSolver):
+    """ 
+    Uses SA-type evaluation for PDSA solution.
+
+    :params lam: discount factor (for ctg)
+    :params (c1,A1,b1,B2): data for (min c'x : A1x + B2u [sense1_arr]  b1)
+    :params (lb1_arr,ub1_arr): lower and upper bounds on x
+    :params sense1_arr: constraint sense (=, >=, <=)
+    :params scenarios: 2d array, where i-th row is for scenario i
+    :params rand1_idx_arr: subset of rhs rows corresponding to data in scenario
+    :params (B2, lb2_arr, ub2_arr, sense2_arr): similar to stage 1
+    :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
+    :params num_second_stage: number of scenarios to pre-samples for second stage
+    """
+    def __init__(self, lam,
+            c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, # first-stage
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
+            seed, num_second_stage,
+    ): 
+        M_h = la.norm(c1)
+        x_lb_arr = x1_bnd_arr[0][state1_idx_arr]
+        x_ub_arr = x1_bnd_arr[1][state1_idx_arr]
+        super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
+
+        x1_lb_arr = x1_bnd_arr[0]
+        x1_ub_arr = x1_bnd_arr[1]
+        x2_lb_arr = x2_bnd_arr[0]
+        x2_ub_arr = x2_bnd_arr[1]
+        n_prev = B1.shape[1]
+        n1 = len(x1_lb_arr)
+        n2 = len(x2_lb_arr)
+        self.mdl_arr = []
+        self.x_arr = []
+        self.ctg_arr = []
+
+        self.rng = np.random.default_rng(seed)
+        self.state1_idx_arr = state1_idx_arr
+        self.scenarios = scenarios
+        self.dummy1_idx_arr = dummy1_idx_arr
+        self.rand1_idx_arr = rand1_idx_arr
+        assert self.scenarios.shape[1] == len(self.rand1_idx_arr), \
+            "Input scenario dim (%d) does not match rand dim (%d)" % (self.scenarios.shape[1], len(self.rand1_idx_arr))
+
+        # SA-type method
+        for k in range(num_second_stage):
+            mdl = gp.Model()
+
+            # first-stage
+            x1 = mdl.addMVar(n1, lb=x1_lb_arr, ub=x1_ub_arr)
+            ctg = mdl.addVar(lb=-1e-6)
+            # TODO: Find a better lower bound
+            for i,sense in enumerate(sense1_arr):
+                constr = mdl.addConstr(A1[i,:]@x1 == b1[i])
+                constr.sense = sense
+                if i in dummy1_idx_arr:
+                    pass
+                if i in dummy1_idx_arr and sense != '=':
+                    raise Exception("Expected equality constraint for dummy variable")
+
+            # second-stage
+            x2 = mdl.addMVar(n2, lb=x2_lb_arr, ub=x2_ub_arr)
+            (c2,A2,b2) = get_stochastic_lp2_params(self.rng.integers(0, len(self.scenarios)))
+            for i,sense in enumerate(sense2_arr):
+                # should not have put B2@x1
+                constr = mdl.addConstr(A2[i,:]@x2 + B2[i,:]@x1 == b2[i])
+                constr.sense = sense
+
+            mdl.setObjective(c1@x1 + c2@x2 + lam*ctg)
+            mdl.update()
+
+            # check model is solvable
+            # mdl.optimize()
+            # if mdl.status != gp.GRB.OPTIMAL:
+            #     raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
+
+            # save
+            self.mdl_arr += [mdl]
+            self.x_arr   += [x1]
+            self.ctg_arr += [ctg]
+
+    def get_gurobi_model(self):
+        return None
+
+    def get_var_names(self):
+        return []
+
+    def get_scenarios(self):
+        return self.scenarios
+
+    def set_scenario_idx(self, i):
+        self.i = i
+
+    def get_single_stage_lbub(self) -> Tuple[float, float]:
+        return self.h_min_val, self.h_max_val
+
+    def solve(self, x_prev, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
+        assert len(self.dummy1_idx_arr) == len(x_prev), "Input state dim (%d) does not match dummy dim (%d)" % (len(x_prev), len(self.dummy1_idx_arr))
+
+        # pick random second stage scenario
+        j = self.rng.integers(1, len(self.mdl_arr), endpoint=False)
+        mdl = self.mdl_arr[j]
+        x   = self.x_arr[j]
+        ctg = self.ctg_arr[j]
+
+        for i, idx in enumerate(self.dummy1_idx_arr):
+            mdl.setAttr("RHS", 
+                    mdl.getConstrs()[idx],
+                    x_prev[i])
+
+        # Setup uncertainity RHS
+        for i, idx in enumerate(self.rand1_idx_arr):
+            mdl.setAttr("RHS", 
+                    mdl.getConstrs()[idx],
+                    self.scenarios[ver][i])
+
+        # Solve
+        mdl.optimize()
+
+        if mdl.status != gp.GRB.OPTIMAL:
+            import ipdb; ipdb.set_trace()
+            raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
+
+        mdl.update() # reset model for future solves
+        x_sol = x.X[self.state1_idx_arr]
+        val = mdl.objVal # getObjective().getValue()
+        ctg = ctg.X
+        grad = np.zeros(len(x_sol))
+
+        return [x_sol, val, grad, ctg]
+
+    def add_cut(self, val, grad, x_prev):
+        self.save_cut(val, grad, x_prev)
+        for i, mdl in enumerate(self.mdl_arr):
+            ctg = self.ctg_arr[i]
+            x   = self.x_arr[i]
+            mdl.addConstr(ctg - grad@x[self.state1_idx_arr] >= val-grad@x_prev)
+
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr):
+        super().load_cuts(val_arr, grad_arr, x_prev_arr)
+
+        for i, mdl in enumerate(self.mdl_arr):
+            ctg = self.ctg_arr[i]
+            x   = self.x_arr[i]
+
+            # TODO: Is this correct?
+            mdl.addConstr(ctg - grad_arr@x >= val_arr-np.diag(grad_arr@x_prev_arr.T))
 
 class LowerBoundModel:
     def __init__(self, n, initial_lb=None):
@@ -549,6 +710,15 @@ class UpperBoundModel:
         :param now_var_names (list): list of names of now state variables in model
         :param h_max_val (float): average maximum value across scenarios for single stage
         """
+        self.has_gp_mdl = True
+        self.lam = lam
+        self.V_0 = h_max_val/(1-self.lam) 
+
+        if not isinstance(model, gp._model.Model):
+            self.has_gp_mdl = False
+            print("Not given gurobi model, upper bound model neglected")
+            return
+
         model.update() # update before copying
         self.model_1 = model.copy()
         self.model_1.setParam('OutputFlag', 0)
@@ -558,8 +728,6 @@ class UpperBoundModel:
         self.n = len(now_var_name_arr)
         self.scenarios = scenarios
         self.N = len(self.scenarios)
-        self.lam = lam
-        self.V_0 = h_max_val/(1-self.lam) 
         self.M = M
 
         # self.hat_vs contains all hat_v's across iterations and 
@@ -618,6 +786,9 @@ class UpperBoundModel:
         Args:
             x (np.array): previous search point
         """
+        if not self.has_gp_mdl:
+            return 
+
         new_hat_vs = np.array([])
         for ver in range(self.N):
             for i in range(self.n):
@@ -659,6 +830,9 @@ class UpperBoundModel:
         Args:
             x (np.array): previous search point
         """
+        if not self.has_gp_mdl:
+            return 
+
         # Compute \hat{v} (aka, solve Model 1)
         self._solve_model_1_and_update_hat_vs(x, self.num_iters)
 
@@ -724,6 +898,9 @@ class UpperBoundModel:
         Returns:
             float: upper bound
         """
+        if not self.has_gp_mdl:
+            return self.V_0
+
         if self.num_iters == 0:
             return self.V_0
 

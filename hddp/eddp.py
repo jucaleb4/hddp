@@ -69,6 +69,10 @@ def get_problem(settings):
         return opt_setup.create_portfolio_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
     elif settings['prob_name'] == 'inventory':
         return opt_setup.create_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
+    elif settings['prob_name'] == 'hierarchical_inventory':
+        return opt_setup.create_hierarchical_inventory_gurobi_model(seed=settings['prob_seed'], **settings)
+    elif settings['prob_name'] == 'hierarchical_test':
+        return opt_setup.create_hierarchical_test_gurobi_model(seed=settings['prob_seed'], **settings)
     else:
         raise Exception("Unknown prob_name %s" % settings['prob_name'])
 
@@ -96,6 +100,18 @@ def get_eddp_problem(settings):
                 settings['lam'], 
                 settings['prob_seed'],
                 has_ctg=t<settings['T']-1,
+            )
+        elif settings['prob_name'] == 'hierarchical_inventory':
+            prob_solver_arr[t], x_0 = opt_setup.create_hierarchical_inventory_gurobi_model(
+                settings['N'], 
+                settings['lam'], 
+                settings['prob_seed'],
+                settings['k1'], 
+                settings['k2'], 
+                settings['eta1_scale'], 
+                settings['tau1_scale'], 
+                settings['eta2_scale'], 
+                has_ctg=t<settings['T']-1, 
             )
         else:
             raise Exception("Unknown prob_name %s" % settings['prob_name'])
@@ -329,6 +345,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
             break
 
     utils.save_logs(settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr, scenario_arr) 
+    # to simulate rolling horizon basis, only save first-stage cutting plane (since time homogenous)
     prob_solver_arr[0].save_cuts_to_file(settings['log_folder'])
 
 def evaluate_bounds(x_0_sol, val_0, ctg_0, ub_model, lam, k, elpsd_time, print_progress=True):
@@ -492,6 +509,7 @@ def HDDP_eval(settings):
 
     We assume settings['policy_folder'] specifies folder of policy.
     """
+    assert "eval_fname" in settings, "Key 'eval_fname' not found in settings"
     prob_solver, x_0 = get_problem(settings)
     x = x_0
 
@@ -500,8 +518,15 @@ def HDDP_eval(settings):
     val_arr    = np.squeeze(pd.read_csv(os.path.join(folder, "vals.csv")).to_numpy())
     grad_arr   = pd.read_csv(os.path.join(folder, "grad.csv")).to_numpy()
     x_prev_arr = pd.read_csv(os.path.join(folder, "x_prev.csv")).to_numpy()
-    for (val, grad, x_prev) in zip(val_arr, grad_arr, x_prev_arr):
-        prob_solver.add_cut(val, grad, x_prev)
+
+    time_limit = settings.get("policy_by_time", np.inf)
+    elpsed_time_arr = pd.read_csv(os.path.join(folder, "elpsed_times.csv"))["# total_time"].to_numpy()
+    time_idx = len(elpsed_time_arr)-1 # since includes time 0
+    if np.max(elpsed_time_arr) > time_limit:
+        time_idx = np.argmax(elpsed_time_arr >= time_limit)
+
+    max_cuts = min(len(val_arr), time_idx)
+    prob_solver.load_cuts(val_arr[:max_cuts], grad_arr[:max_cuts], x_prev_arr[:max_cuts])
 
     cum_cost_arr = np.zeros(settings['eval_T'], dtype=float)
     prev_cum_cost = 0
