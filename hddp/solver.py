@@ -646,6 +646,160 @@ class PDSAEvalSA(GenericSolver):
             # See PDSAEvalSA:load_cuts
             mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.diag(grad_arr@x_prev_arr.T))
 
+class FixedControlEval(GenericSolver):
+    """ 
+    Uses SA-type evaluation for PDSA solution.
+
+    :params lam: discount factor (for ctg)
+    :params (c1,A1,b1,B2): data for (min c'x : A1x + B2u [sense1_arr]  b1)
+    :params (lb1_arr,ub1_arr): lower and upper bounds on x
+    :params sense1_arr: constraint sense (=, >=, <=)
+    :params scenarios: 2d array, where i-th row is for scenario i
+    :params rand1_idx_arr: subset of rhs rows corresponding to data in scenario
+    :params (B2, lb2_arr, ub2_arr, sense2_arr): similar to stage 1
+    :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
+    :params num_second_stage: number of scenarios to pre-samples for second stage
+    """
+    def __init__(self, lam,
+            c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, ctrl1_idx_arr, # first-stage
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
+            seed, num_second_stage, u_0, u_t
+    ): 
+        M_h = la.norm(c1)
+        x_lb_arr = x1_bnd_arr[0][state1_idx_arr]
+        x_ub_arr = x1_bnd_arr[1][state1_idx_arr]
+        super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
+
+        # setup fixed control
+        self.t = 0
+        self.fixed_u_0 = np.array(u_0)
+        self.fixed_u_t = np.array(u_t)
+
+        x1_lb_arr = x1_bnd_arr[0]
+        x1_ub_arr = x1_bnd_arr[1]
+        x2_lb_arr = x2_bnd_arr[0]
+        x2_ub_arr = x2_bnd_arr[1]
+        n_prev = B1.shape[1]
+        n1 = len(x1_lb_arr)
+        n2 = len(x2_lb_arr)
+        self.mdl_arr = []
+        self.x_arr = []
+        self.ctg_arr = []
+
+        self.rng = np.random.default_rng(seed)
+        self.state1_idx_arr = state1_idx_arr
+        self.scenarios = scenarios
+        self.dummy1_idx_arr = dummy1_idx_arr
+        self.rand1_idx_arr = rand1_idx_arr
+        self.ctrl1_idx_arr = ctrl1_idx_arr
+        assert self.scenarios.shape[1] == len(self.rand1_idx_arr), \
+            "Input scenario dim (%d) does not match rand dim (%d)" % (self.scenarios.shape[1], len(self.rand1_idx_arr))
+
+        for k in range(num_second_stage):
+            mdl = gp.Model()
+
+            # first-stage
+            x1 = mdl.addMVar(n1, lb=x1_lb_arr, ub=x1_ub_arr)
+            ctg = mdl.addVar(lb=1e-6)
+            # TODO: Find a better lower bound
+            for i,sense in enumerate(sense1_arr):
+                constr = mdl.addConstr(A1[i,:]@x1 == b1[i])
+                constr.sense = sense
+                if i in dummy1_idx_arr:
+                    pass
+                if i in dummy1_idx_arr and sense != '=':
+                    raise Exception("Expected equality constraint for dummy variable")
+
+            # second-stage
+            x2 = mdl.addMVar(n2, lb=x2_lb_arr, ub=x2_ub_arr)
+            (c2,A2,b2) = get_stochastic_lp2_params()
+            for i,sense in enumerate(sense2_arr):
+                # should not have put B2@x1
+                constr = mdl.addConstr(A2[i,:]@x2 + B2[i,:]@x1 == b2[i])
+                constr.sense = sense
+
+            mdl.setObjective(c1@x1 + c2@x2 + lam*ctg)
+            mdl.update()
+
+            # save
+            self.mdl_arr += [mdl]
+            self.x_arr   += [x1]
+            self.ctg_arr += [ctg]
+
+    def get_gurobi_model(self):
+        return None
+
+    def get_var_names(self):
+        return []
+
+    def get_scenarios(self):
+        return self.scenarios
+
+    def set_scenario_idx(self, i):
+        self.i = i
+
+    def get_single_stage_lbub(self) -> Tuple[float, float]:
+        return self.h_min_val, self.h_max_val
+
+    def solve(self, x_prev, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
+        assert len(self.dummy1_idx_arr) == len(x_prev), "Input state dim (%d) does not match dummy dim (%d)" % (len(x_prev), len(self.dummy1_idx_arr))
+
+        # pick random second stage scenario
+        j = self.rng.integers(1, len(self.mdl_arr), endpoint=False)
+        mdl = self.mdl_arr[j]
+        x   = self.x_arr[j]
+        ctg = self.ctg_arr[j]
+
+        # Setup previous variable
+        for i, idx in enumerate(self.dummy1_idx_arr):
+            mdl.setAttr("RHS", 
+                    mdl.getConstrs()[idx],
+                    x_prev[i])
+
+        # Setup uncertainity RHS
+        for i, idx in enumerate(self.rand1_idx_arr):
+            mdl.setAttr("RHS", 
+                    mdl.getConstrs()[idx],
+                    self.scenarios[ver][i])
+
+        # Set the control variable
+        u = self.fixed_u_0 if self.t == 0 else self.fixed_u_t
+        u = np.clip(u, -25-(x_prev-self.scenarios[ver]), 50-(x_prev-self.scenarios[ver]))
+        for i, idx in enumerate(self.ctrl1_idx_arr):
+            x[idx].lb = u[i]
+            x[idx].ub = u[i]
+
+        # Solve
+        mdl.update()
+        mdl.optimize()
+
+        if mdl.status != gp.GRB.OPTIMAL:
+            raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
+
+        mdl.update() # reset model for future solves
+        x_sol = x.X[self.state1_idx_arr]
+        val = mdl.objVal # getObjective().getValue()
+        ctg = ctg.X
+        grad = np.zeros(len(x_sol))
+
+        return [x_sol, val, grad, ctg]
+
+    def add_cut(self, val, grad, x_prev):
+        self.save_cut(val, grad, x_prev)
+        for i, mdl in enumerate(self.mdl_arr):
+            ctg = self.ctg_arr[i]
+            x   = self.x_arr[i]
+            mdl.addConstr(ctg - grad@x[self.state1_idx_arr] >= val-grad@x_prev)
+
+    def load_cuts(self, val_arr, grad_arr, x_prev_arr):
+        super().load_cuts(val_arr, grad_arr, x_prev_arr)
+
+        for i, mdl in enumerate(self.mdl_arr):
+            ctg = self.ctg_arr[i]
+            x   = self.x_arr[i]
+            # See PDSAEvalSA:load_cuts
+            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.diag(grad_arr@x_prev_arr.T))
+
 class LowerBoundModel:
     def __init__(self, n, initial_lb=None):
         """ Creates lower bound model

@@ -515,28 +515,35 @@ def HDDP_eval(settings):
 
     # retrieve and load last policy 
     folder = settings["log_folder"]
-    val_arr    = np.squeeze(pd.read_csv(os.path.join(folder, "vals.csv")).to_numpy())
-    grad_arr   = pd.read_csv(os.path.join(folder, "grad.csv")).to_numpy()
-    x_prev_arr = pd.read_csv(os.path.join(folder, "x_prev.csv")).to_numpy()
+    if not settings["fixed_eval"]:
+        val_arr    = np.squeeze(pd.read_csv(os.path.join(folder, "vals.csv")).to_numpy())
+        grad_arr   = pd.read_csv(os.path.join(folder, "grad.csv")).to_numpy()
+        x_prev_arr = pd.read_csv(os.path.join(folder, "x_prev.csv")).to_numpy()
 
-    time_limit = settings.get("policy_by_time", np.inf)
-    elpsed_time_arr = pd.read_csv(os.path.join(folder, "elpsed_times.csv"))["# total_time"].to_numpy()
-    time_idx = len(elpsed_time_arr)-1 # since includes time 0
-    if np.max(elpsed_time_arr) > time_limit:
-        time_idx = np.argmax(elpsed_time_arr >= time_limit)
+        time_limit = settings.get("policy_by_time", np.inf)
+        if time_limit == 0:
+            n = grad_arr.shape[1]
+            prob_solver.add_cut(0, np.zeros(n), np.zeros(n))
+        else:
+            elpsed_time_arr = pd.read_csv(os.path.join(folder, "elpsed_times.csv"))["# total_time"].to_numpy()
+            time_idx = len(elpsed_time_arr)-1 # since includes time 0
+            if np.max(elpsed_time_arr) > time_limit:
+                time_idx = np.argmax(elpsed_time_arr >= time_limit)
 
-    max_cuts = min(len(val_arr), time_idx)
-    prob_solver.load_cuts(val_arr[:max_cuts], grad_arr[:max_cuts], x_prev_arr[:max_cuts])
+            max_cuts = min(len(val_arr), time_idx)
+            prob_solver.load_cuts(val_arr[:max_cuts], grad_arr[:max_cuts], x_prev_arr[:max_cuts])
 
     cum_cost_arr = np.zeros(settings['eval_T'], dtype=float)
     prev_cum_cost = 0
-    i_selector = np.random.default_rng(settings['prob_seed']+1 if settings['prob_seed'] is None else None)
+    i_selector = np.random.default_rng(settings.get('prob_seed',0)+1)
+    i = 0
     for t in range(settings['eval_T']):
-        i = i_selector.integers(1, settings['N'], endpoint=True)
         (x, val, _, ctg) = prob_solver.solve(x, i) 
         curr_cost = val - settings['lam']*ctg
         cum_cost_arr[t] = curr_cost + settings['lam'] * prev_cum_cost 
         prev_cum_cost = cum_cost_arr[t]
+        i = i_selector.integers(1, settings['N'], endpoint=True)
 
     # save in file
+    print("Final cumulative score over %d periods with discount %.4f: %.6e" % (settings['eval_T'], settings['lam'], cum_cost_arr[-1]))
     np.savetxt(os.path.join(folder, settings['eval_fname']), np.atleast_2d(cum_cost_arr).T, delimiter=',')

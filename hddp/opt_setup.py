@@ -285,7 +285,7 @@ def test_gurobi_var_val(mdl, idx_arr, val_arr):
 
 def create_hierarchical_inventory_gurobi_model(
         N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg=True, 
-        sa_eval=False, saa_eval=False, N2=0, **kwargs,
+        sa_eval=False, fixed_eval=False, N2=0, **kwargs,
     ):
     """ Creates basic hierarchical inventory problem 
 
@@ -296,8 +296,8 @@ def create_hierarchical_inventory_gurobi_model(
     :param seed: seeding for random scenarios
     """
 
-    n = 2 # number of items with demand
-    m = 3 # number of parts
+    n = 5 # number of items with demand
+    m = 10 # number of parts
 
     rng = np.random.default_rng(seed)
     c_arr = 1 + np.cos(np.pi/3) + rng.random(size=n)
@@ -326,6 +326,7 @@ def create_hierarchical_inventory_gurobi_model(
     x_bnd_arr = np.vstack((x_lb_arr, x_ub_arr))
     _, state_idx_arr = get_gurobi_var_name_idx(mdl, "state")
     _, order_idx_arr = get_gurobi_var_name_idx(mdl, "order")
+    _, ctrl_idx_arr = get_gurobi_var_name_idx(mdl, "ctrl")
     _, x_t_idx_arr = get_gurobi_var_name_idx(mdl, "x_t")
     _, dummy_idx_arr = get_gurobi_constr_name_idx(mdl, "dummy")
     _, rand_constr_idx_arr = get_gurobi_constr_name_idx(mdl, "rand") 
@@ -390,12 +391,11 @@ def create_hierarchical_inventory_gurobi_model(
             lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
             get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, seed, N2,
         )
-    elif saa_eval:
-        raise NotImplementedError
-        # hier_inv_solver = solver.PDSAEvalSAA(
-        #     lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
-        #     get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, N2,
-        # )
+    elif fixed_eval:
+        hier_inv_solver = solver.FixedControlEval(
+            lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, ctrl_idx_arr,
+            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, seed, N2, kwargs['u_0'], kwargs['u_t'],
+        )
     else:
         hier_inv_solver = solver.PDSASolverForLPs(
             lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr,
