@@ -363,7 +363,7 @@ class PDSASolverForLPs(GenericSolver):
         uA2 = np.inf
         for i in range(10):
             # arbitrary choose initial scenario to estimate
-            (c2,A2,_) = get_stochastic_lp2_params(0)
+            (c2,A2,_) = get_stochastic_lp2_params()
             uA2 = min(np.min(la.svd(A2, compute_uv=False)), uA2)
             M2  = max(M2, 2*la.norm(c2))
         if uA2 < 1e-2:
@@ -417,7 +417,7 @@ class PDSASolverForLPs(GenericSolver):
             x = np.zeros(A.shape[1])
         elif stage == 2:
             B = self.B2
-            c,A,b = self.get_stochastic_lp2_params(ver)
+            c,A,b = self.get_stochastic_lp2_params()
             x_bnd_arr, y_bnd_arr = self.x2_bnd_arr, self.y2_bnd_arr
             k = self.k2
             tau = eta = self.eta2_scale * np.sqrt(2) * la.norm(A) # theory says tau = eta
@@ -449,6 +449,13 @@ class PDSASolverForLPs(GenericSolver):
             barx = (1.-alpha)*barx + alpha*x
             bary = (1.-alpha)*bary + alpha*y
             barval = (1.-alpha)*barval + alpha*val_t
+
+        # fix ctg
+        # if self.ct > 0:
+        #     x_for_ctg = barx[self.state1_idx_arr]
+        #     linear_approx = self.val_arr[:self.ct] + np.einsum("ij,ij->i", self.grad_arr[:self.ct], x_for_ctg - self.x_prev_arr[:self.ct])
+        #     correct_ctg = np.min(linear_approx)
+        #     barx[self.ctg_idx] = correct_ctg
 
         # compute final output
         objval = np.dot(c, barx) + barval
@@ -543,7 +550,7 @@ class PDSAEvalSA(GenericSolver):
 
             # first-stage
             x1 = mdl.addMVar(n1, lb=x1_lb_arr, ub=x1_ub_arr)
-            ctg = mdl.addVar(lb=-1e-6)
+            ctg = mdl.addVar(lb=1e-6)
             # TODO: Find a better lower bound
             for i,sense in enumerate(sense1_arr):
                 constr = mdl.addConstr(A1[i,:]@x1 == b1[i])
@@ -555,7 +562,7 @@ class PDSAEvalSA(GenericSolver):
 
             # second-stage
             x2 = mdl.addMVar(n2, lb=x2_lb_arr, ub=x2_ub_arr)
-            (c2,A2,b2) = get_stochastic_lp2_params(self.rng.integers(0, len(self.scenarios)))
+            (c2,A2,b2) = get_stochastic_lp2_params()
             for i,sense in enumerate(sense2_arr):
                 # should not have put B2@x1
                 constr = mdl.addConstr(A2[i,:]@x2 + B2[i,:]@x1 == b2[i])
@@ -613,7 +620,6 @@ class PDSAEvalSA(GenericSolver):
         mdl.optimize()
 
         if mdl.status != gp.GRB.OPTIMAL:
-            import ipdb; ipdb.set_trace()
             raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
 
         mdl.update() # reset model for future solves
@@ -637,9 +643,8 @@ class PDSAEvalSA(GenericSolver):
         for i, mdl in enumerate(self.mdl_arr):
             ctg = self.ctg_arr[i]
             x   = self.x_arr[i]
-
-            # TODO: Is this correct?
-            mdl.addConstr(ctg - grad_arr@x >= val_arr-np.diag(grad_arr@x_prev_arr.T))
+            # See PDSAEvalSA:load_cuts
+            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.diag(grad_arr@x_prev_arr.T))
 
 class LowerBoundModel:
     def __init__(self, n, initial_lb=None):

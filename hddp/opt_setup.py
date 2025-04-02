@@ -311,20 +311,22 @@ def create_hierarchical_inventory_gurobi_model(
 
     # first stage
     mdl = gp.Model()
-    y_t = mdl.addMVar(n, lb=-25, ub=50, name="state")
-    u_t = mdl.addMVar(n, lb=0, ub=50, name="ctrl")
+    y_tt = mdl.addMVar(n, lb=-25, ub=50, name="state")
+    x_t = mdl.addMVar(n, lb=-50, ub=50, name="x_t")
+    u_tt = mdl.addMVar(n, lb=0, ub=50, name="ctrl")
     o_t = mdl.addMVar(m, lb=0, ub=50, name="order")
     z_t = mdl.addMVar(n, lb=-25, ub=50, name="aux") # dummy variable for previous stage
-    mdl.addConstr(-y_t + z_t + u_t == 0, name="rand")
+    mdl.addConstr(y_tt - (x_t + u_tt) == 0, name="flow")
+    mdl.addConstr(-x_t + z_t == 0, name="rand")
     mdl.addConstr(z_t == 0, name="dummy")
-    mdl.setObjective(a_costs@o_t + c_arr@u_t, gp.GRB.MINIMIZE)
+    mdl.setObjective(a_costs@o_t + c_arr@u_tt, gp.GRB.MINIMIZE)
     mdl.update()
 
     (c,A,b,sense_arr,x_lb_arr,x_ub_arr) = get_cAb_model(mdl)
     x_bnd_arr = np.vstack((x_lb_arr, x_ub_arr))
     _, state_idx_arr = get_gurobi_var_name_idx(mdl, "state")
     _, order_idx_arr = get_gurobi_var_name_idx(mdl, "order")
-    _, aux_idx_arr = get_gurobi_var_name_idx(mdl, "aux")
+    _, x_t_idx_arr = get_gurobi_var_name_idx(mdl, "x_t")
     _, dummy_idx_arr = get_gurobi_constr_name_idx(mdl, "dummy")
     _, rand_constr_idx_arr = get_gurobi_constr_name_idx(mdl, "rand") 
     B = np.zeros((A.shape[0], n), dtype=float)
@@ -336,14 +338,14 @@ def create_hierarchical_inventory_gurobi_model(
     l = mdl2.addMVar(n, lb=0, ub=50, name="left")
     x_pos = mdl2.addMVar(n, lb=0, ub=50, name="x_pos")
     x_neg = mdl2.addMVar(n, lb=0, ub=50, name="x_neg")
-    p = mdl2.addMVar(n, lb=0, ub=1000, name="p_var")
-    q = mdl2.addMVar(m, lb=0, ub=1000, name="q_var")
+    p = mdl2.addMVar(n, lb=0, name="p_var")
+    q = mdl2.addMVar(m, lb=0, name="q_var")
     f = mdl2.addMVar(m, lb=0, ub=50, name="f")   # dummy for o
-    y = mdl2.addMVar(n, lb=-25, ub=50, name="y") # dummy for z
+    x = mdl2.addMVar(n, lb=-50, ub=50, name="y") # dummy for x
     mdl2.addConstrs((q[i] - f[i] + gp.quicksum(p) == 0 for i in range(m)), name="convert")
-    mdl2.addConstr(x_pos - x_neg - y == 0, name="rand")
+    mdl2.addConstr(x_pos - x_neg - x == 0)
     mdl2.addConstr(f == 0, name="dummy_o")
-    mdl2.addConstr(y == 0, name="dummy_z")
+    mdl2.addConstr(x == 0, name="dummy_x")
     mdl2.addConstr(l == x_neg - p)
     mdl2.setObjective(gp.quicksum(p) + gp.quicksum(q) + gp.quicksum(l) + gp.quicksum(x_pos)) 
     mdl2.update()
@@ -353,9 +355,9 @@ def create_hierarchical_inventory_gurobi_model(
     n_prev = len(mdl.getVars())
     B2 = np.zeros((A2.shape[0], n_prev), dtype=float)
     _, dummy_o_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy_o")
-    _, dummy_z_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy_z")
+    _, dummy_x_idx_arr = get_gurobi_constr_name_idx(mdl2, "dummy_x")
     B2[np.ix_(dummy_o_idx_arr,order_idx_arr)] = -np.eye(m)
-    B2[np.ix_(dummy_z_idx_arr,aux_idx_arr)] = -np.eye(n)
+    B2[np.ix_(dummy_x_idx_arr,x_t_idx_arr)] = -np.eye(n)
 
     # get columns of random components
     _, p_var_idx = get_gurobi_var_name_idx(mdl2, "p_var")
@@ -363,17 +365,16 @@ def create_hierarchical_inventory_gurobi_model(
     _, l_var_idx = get_gurobi_var_name_idx(mdl2, "left")
     _, x_pos_var_idx = get_gurobi_var_name_idx(mdl2, "x_pos")
     _, convert_constr_idx = get_gurobi_constr_name_idx(mdl2, "convert")
-    _, rand2_constr_idx_arr = get_gurobi_constr_name_idx(mdl2, "rand")
     mu = np.ones(n)
     L_m  = rng.normal(size=(m,m))
     L_n  = rng.normal(size=(n,n))
     Sig_m = L_m@L_m.T
     Sig_n = 0.1*L_n@L_n.T
-    def get_stochastic_lp2_params(i):
+    def get_stochastic_lp2_params():
         tmp_n = rng.multivariate_normal(mean=mu, cov=Sig_n) 
         tmp_m = rng.multivariate_normal(mean=np.sqrt(a_costs), cov=Sig_m) 
         m,n = len(tmp_m), len(tmp_n)
-        c2[p_var_idx] = np.maximum(-1, tmp_n)
+        c2[p_var_idx] = np.maximum(0, tmp_n)
         c2[q_var_idx] = -np.minimum(a_costs, tmp_m)
         c2[l_var_idx]     = 10 + 5*rng.uniform(size=n)    # b
         c2[x_pos_var_idx] = 0.1 + 0.2*rng.uniform(size=n) # h
@@ -382,8 +383,6 @@ def create_hierarchical_inventory_gurobi_model(
         a2 = 2./n*rng.uniform(size=a1.shape)
         # https://stackoverflow.com/questions/22927181/selecting-specific-rows-and-columns-from-numpy-array
         A2[np.ix_(convert_constr_idx,p_var_idx)] = np.multiply(a1,a2) 
-
-        b2[rand2_constr_idx_arr] = scenarios[i]
         return (c2, np.asarray(A2), b2)
 
     if sa_eval:
