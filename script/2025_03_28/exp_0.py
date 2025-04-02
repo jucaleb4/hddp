@@ -46,7 +46,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('eta2_scale', 1.0),
         ('prob_name', 'hierarchical_inventory'),
         ('sa_eval', False),
-        ('saa_eval', False),
+        ('fixed_eval', False),
     ])
 
     lam_niter_T_arr = [(0.8, 200, 24), (0.9906, 750, 128)]
@@ -85,8 +85,8 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         od["mode"] = mode
         od["k1"] = k1
         od["k2"] = k2
-        od["eta1"] = od["tau1"] = eta1
-        od["eta2"] = eta2
+        od["eta1_scale"] = od["tau1_scale"] = eta1
+        od["eta2_scale"] = eta2
 
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
