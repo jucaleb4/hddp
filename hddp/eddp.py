@@ -194,6 +194,8 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
             select_time_arr[k] = select_time_arr[k-1] + time.time() - s_time
 
             # evaluate
+            if np.isnan(avg_val) or np.any(np.isnan(avg_grad)):
+                break
             s_time = time.time()
             lb_model.add_cut(avg_val, avg_grad, x_curr)
             ub_model.add_search_point_to_ub_model(x_curr)
@@ -525,12 +527,15 @@ def HDDP_eval(settings):
             n = grad_arr.shape[1]
             prob_solver.add_cut(0, np.zeros(n), np.zeros(n))
         else:
+            val_idx = time_idx = len(val_arr) 
+            val_threshold = 1e16
             elpsed_time_arr = pd.read_csv(os.path.join(folder, "elpsed_times.csv"))["# total_time"].to_numpy()
-            time_idx = len(elpsed_time_arr)-1 # since includes time 0
             if np.max(elpsed_time_arr) > time_limit:
                 time_idx = np.argmax(elpsed_time_arr >= time_limit)
+            if np.max(val_arr) > val_threshold:
+                val_idx = np.argmax(val_arr >= val_threshold)
 
-            max_cuts = min(len(val_arr), time_idx)
+            max_cuts = np.min([len(val_arr), time_idx, val_idx])
             prob_solver.load_cuts(val_arr[:max_cuts], grad_arr[:max_cuts], x_prev_arr[:max_cuts])
 
     cum_cost_arr = np.zeros(settings['eval_T'], dtype=float)

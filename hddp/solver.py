@@ -570,6 +570,7 @@ class PDSAEvalSA(GenericSolver):
 
             mdl.setObjective(c1@x1 + c2@x2 + lam*ctg)
             mdl.update()
+            mdl.setParam('LogToConsole', 0)
 
             # check model is solvable
             # mdl.optimize()
@@ -644,7 +645,7 @@ class PDSAEvalSA(GenericSolver):
             ctg = self.ctg_arr[i]
             x   = self.x_arr[i]
             # See PDSAEvalSA:load_cuts
-            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.diag(grad_arr@x_prev_arr.T))
+            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.einsum('ij,ij->i', grad_arr, x_prev_arr))
 
 class FixedControlEval(GenericSolver):
     """ 
