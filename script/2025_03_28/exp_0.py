@@ -77,6 +77,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     print("-" * ((4)*10 + 20 + len(exp_metadata)))
 
     ct = 0
+    od['h_bnds'] = [0, 500]
     for ((lam, max_iter, T), (mode, seed), k1, k2, eta1, eta2) in itertools.product(lam_niter_T_arr, mode_seed_arr, k1_arr, k2_arr, eta1_arr, eta2_arr):
         od["lam"] = lam
         od["prob_seed"] = seed

@@ -46,16 +46,12 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('tau1_scale', 1.0),
         ('eta2_scale', 1.0),
         ('prob_name', 'hierarchical_inventory'),
-        ('sa_eval', False),
-        ('saa_eval', False),
+        ('sa_eval', True),
+        ('fixed_eval', False),
     ])
 
-    # number of tuning parameters in exp_0
-    run_id_arr = list(range(72))
-    eval_type_arr = ['sa_eval'] # ['sa_eval', 'saa_eval']
-    prob_date_arr = [('hierarchical_inventory', '2025_03_28')]
-    # first is in-sample, last 29 are out of sample
-    prob_seed_N_arr = [(seed_0, 128)] # [(seed_0, 128)] + [(seed_0+i, od['T']*2) for i in range(1,30)]
+    run_id_lam_T_arr = [(i,0.8,24) for i in range(0,36)]
+    run_id_lam_T_arr += [(i,0.9906,128) for i in range(36,72)]
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
@@ -65,35 +61,32 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     if not(os.path.exists(setting_folder_base)):
         os.makedirs(setting_folder_base)
 
-    # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "eval"]
+    exp_metadata = ["Exp id", "lam"]
     row_format ="{:>10}|{:>10}"
     print("")
     print(row_format.format(*exp_metadata))
     print("-" * (21))
 
     ct = 0
-    for (eval_type, run_id, (prob_name, date), (prob_seed, N)) in itertools.product(eval_type_arr, run_id_arr, prob_date_arr, prob_seed_N_arr):
-        od[eval_type] = True
-        od['prob_name'] = prob_name
-        od['prob_seed'] = prob_seed
-        od['N'] = N
-        od['eval_fname'] = "eval_seed=%d.csv" % prob_seed
+    od['eval_fname'] = "eval_seed=0.csv" 
+    # for (run_id,lam,T) in itertools.product(run_id_lam_T_arr):
+    for (run_id,lam,T) in run_id_lam_T_arr:
+        od["lam"] = lam
+        od["eval_T"] = T*10
 
-        setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
-        log_folder_base = os.path.join("logs", date, "exp_0")
+        setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % run_id)
+        log_folder_base = os.path.join("logs", DATE, "exp_0")
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
+        od["cut_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
         assert os.path.exists(log_folder_base), "Folder %s does not exist, cannot run evaluation" % log_folder_base
 
-        print(row_format.format(ct, eval_type))
+        print(row_format.format(ct, lam))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
         with open(setting_fname, 'w') as f:
             # https://stackoverflow.com/questions/42518067/how-to-use-ordereddict-as-an-input-in-yaml-dump-or-yaml-safe-dump
             yaml.dump(od, f, default_flow_style=False, sort_keys=False)
-
-        od[eval_type] = False
         ct += 1
 
     assert ct == MAX_RUNS, "Number of created exps (%i) does not match MAX_RUNS (%i)" % (ct, MAX_RUNS)

@@ -9,9 +9,9 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 300
-DATE = "2025_01_26"
-EXP_ID  = 0
+MAX_RUNS = 240
+DATE = "2025_04_02"
+EXP_ID  = 1
 
 def parse_sub_runs(sub_runs):
     start_run_id, end_run_id = 0, MAX_RUNS
@@ -30,55 +30,70 @@ def parse_sub_runs(sub_runs):
 def setup_setting_files(seed_0, n_seeds, max_iter):
     od = dict([
         ('T', 128),
-        ('eval_T', 10*128),
         ('N', 50),
-        ('lam', 0.9906),
+        ('N2', 100),
+        ('lam', 0.8),
         ('eps', 1e-3),
         ('max_iter', max_iter),
-        ('time_limit', 7200),
+        ('policy_by_time', 2000),
+        ('eval_T', 24*10),
         ('prob_seed', seed_0),
         ('alg_seed', seed_0),
-        ('mode', int(utils.Mode.EDDP)),
-        ('prob_name', 'hydro'),
+        ('mode', int(utils.Mode.INF_EDDP)),
+        ('k1', 100),
+        ('k2', 100),
+        ('eta1_scale', 1.0),
+        ('tau1_scale', 1.0),
+        ('eta2_scale', 1.0),
+        ('prob_name', 'hierarchical_inventory'),
+        ('sa_eval', True),
+        ('fixed_eval', False),
     ])
 
-    name_run_id_arr = [("Inf-EDDP", 0), ("CE-Inf-EDDP", 1), ("Gap-Inf-EDDP", 2), ("Inf-SDDP(0)",3), ("SDDP(0)", 14)]
-    prob_date_arr = [('hydro', '2025_01_15'), ('inventory', '2025_01_16')]
-    # first is in-sample, last 29 are out of sample
-    prob_seed_N_arr = [(seed_0, 128)] + [(seed_0+i, od['T']*2) for i in range(1,30)]
+    # 4 runs: Inf-EDDP, CE-Inf-EDDP, Inf-SDDP, and SDDP
+    run_cut_id_lam_T_arr = [(i, i, 0.8, 24) for i in range(4)]
+    # run_cut_id_lam_T_arr = [(i, 3, 0.8, 24) for i in range(4)]
+    run_cut_id_lam_T_arr += [(i+4, i+4, 0.9906, 128) for i in range(4)]
+    # run_cut_id_lam_T_arr += [(i+4, 3, 0.9906, 128) for i in range(4)]
+    seed_arr = list(range(30))
 
+    exp_id = 0 # we use controller for exp_0
+    log_folder_base = os.path.join("logs", DATE, "exp_%s" % exp_id)
+    # cut_folder_base = os.path.join("logs", "2025_03_28", "exp_%s" % 0)
+    cut_folder_base = log_folder_base
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
 
+    if not(os.path.exists(log_folder_base)):
+        os.makedirs(log_folder_base)
     if not(os.path.exists(setting_folder_base)):
         os.makedirs(setting_folder_base)
 
-    # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "mode", "prob", "prob_seed"]
-    row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
+    exp_metadata = ["Exp id", "run_id", "lam", "seed"]
+    row_format ="{:>10}|{:>10}|{:>10}|{:>10}"
     print("")
-    print("About: In- and out-of-sample performance on inventory and hydro on gamma=0.9906. Out of sample is repeated 30 times. \n")
     print(row_format.format(*exp_metadata))
-    print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
+    print("-" * (43))
 
     ct = 0
-    for ((name, run_id), (prob_name, date), (prob_seed, N)) in itertools.product(name_run_id_arr, prob_date_arr, prob_seed_N_arr):
-        od['prob_name'] = prob_name
+    for ((run_id, cut_id, lam, T), prob_seed) in itertools.product(run_cut_id_lam_T_arr, seed_arr):
+        od['eval_T'] = int(10*T)
+        od['lam'] = lam
         od['prob_seed'] = prob_seed
-        od['N'] = N
         od['eval_fname'] = "eval_seed=%d.csv" % prob_seed
 
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
-        log_folder_base = os.path.join("logs", date, "exp_0")
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
+        od["cut_folder"] = os.path.join(cut_folder_base, "run_%s" % cut_id)
         assert os.path.exists(log_folder_base), "Folder %s does not exist, cannot run evaluation" % log_folder_base
 
-        print(row_format.format(ct, name, prob_name, prob_seed))
+        print(row_format.format(ct, run_id, lam, prob_seed))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
         with open(setting_fname, 'w') as f:
             # https://stackoverflow.com/questions/42518067/how-to-use-ordereddict-as-an-input-in-yaml-dump-or-yaml-safe-dump
             yaml.dump(od, f, default_flow_style=False, sort_keys=False)
+
         ct += 1
 
     assert ct == MAX_RUNS, "Number of created exps (%i) does not match MAX_RUNS (%i)" % (ct, MAX_RUNS)

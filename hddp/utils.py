@@ -29,6 +29,7 @@ class Mode(IntEnum):
     EDDP = 4
     GCE_INF_EDDP = 5
     SDDP = 6
+    G_INF_SDDP = 7
 
 class SaturatedSet:
 
@@ -103,33 +104,3 @@ class SaturatedSet:
         # argmax_idx = np.argmax(sat_lvls)
         dist_x = agg_x[argmax_idx]
         return dist_x, sat_lvls[argmax_idx], argmax_idx
-
-    # TODO: Can we get rid of the two functions below
-    def smallest_sat_lvl(self, agg_x):
-        """ Gets lowest saturation lvl (and index) 
-        
-        Args:
-            agg_x (np.array): aggregate points
-        
-        Returns:
-            dist_x (np.array): point with highest saturation level
-            sat_lvls[argmax_idx] (np.array): saturation level 
-        """
-        sat_lvls = np.array([self.get(agg_x[i]) for i in range(len(agg_x))])
-        argmin_idx = np.argmin(sat_lvls)
-        dist_x = agg_x[argmin_idx]
-        return dist_x, sat_lvls[argmin_idx]
-
-    def rand_sat_lvl(self, agg_x):
-        """ Gets random saturation lvl (and index)
-
-        Args:
-            agg_x (np.array): aggregate points
-
-        Returns:
-            dist_x (np.array): point with highest saturation level
-            sat_lvls[argmax_idx] (np.array): saturation level
-        """
-        i = np.random.randint(low=0, high=len(agg_x))
-        return agg_x[i], self.get(agg_x[i])
-

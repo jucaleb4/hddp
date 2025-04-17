@@ -314,7 +314,7 @@ class PDSASolverForLPs(GenericSolver):
     def __init__(self, lam,
             c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, # first-stage
             get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
-            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg, # hyperparameters
+            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg, ctg_bnds, # hyperparameters
     ): 
         # ignore non-state variables
         M_h = la.norm(c1)
@@ -353,7 +353,7 @@ class PDSASolverForLPs(GenericSolver):
             self.A1 = np.hstack((self.A1, np.zeros((self.A1.shape[0], 1))))
             self.c1 = np.append(self.c1, lam)
             self.B2 = np.hstack((self.B2, np.zeros((self.B2.shape[0], 1))))
-            self.x1_bnd_arr = np.hstack((self.x1_bnd_arr, np.array([[-np.inf, np.inf]]).T))
+            self.x1_bnd_arr = np.hstack((self.x1_bnd_arr, np.atleast_2d(ctg_bnds).T))
             self.ctg_constr_starting_idx = self.A1.shape[0]
             self.ctg_idx = self.A1.shape[1]-1
 
@@ -515,72 +515,39 @@ class PDSAEvalSA(GenericSolver):
     :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
     :params num_second_stage: number of scenarios to pre-samples for second stage
     """
-    def __init__(self, lam,
-            c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, # first-stage
-            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
-            seed, num_second_stage,
+    def __init__(self, lam, mdl, state1_idx_arr, x1_bnd_arr, scenarios, rand1_idx_arr, dummy1_idx_arr,
+            # c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, # first-stage
+            # get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
+            # seed, num_second_stage,
     ): 
-        M_h = la.norm(c1)
+        M_h = 0. # la.norm(c1)
         x_lb_arr = x1_bnd_arr[0][state1_idx_arr]
         x_ub_arr = x1_bnd_arr[1][state1_idx_arr]
         super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
 
-        x1_lb_arr = x1_bnd_arr[0]
-        x1_ub_arr = x1_bnd_arr[1]
-        x2_lb_arr = x2_bnd_arr[0]
-        x2_ub_arr = x2_bnd_arr[1]
-        n_prev = B1.shape[1]
-        n1 = len(x1_lb_arr)
-        n2 = len(x2_lb_arr)
-        self.mdl_arr = []
-        self.x_arr = []
-        self.ctg_arr = []
+        self.mdl = mdl
+        self.ctg = self.mdl.addVar(lb=-np.inf, obj=lam, name="ctg") 
+        self.mdl.setParam('LogToConsole', 0)
 
-        self.rng = np.random.default_rng(seed)
-        self.state1_idx_arr = state1_idx_arr
+        # x1_lb_arr = x1_bnd_arr[0]
+        # x1_ub_arr = x1_bnd_arr[1]
+        # x2_lb_arr = x2_bnd_arr[0]
+        # x2_ub_arr = x2_bnd_arr[1]
+        # n_prev = B1.shape[1]
+        # n1 = len(x1_lb_arr)
+        # n2 = len(x2_lb_arr)
+        # self.mdl_arr = []
+        # self.x_arr = []
+        # self.ctg_arr = []
+
+        # self.rng = np.random.default_rng(seed)
+        # self.state1_idx_arr = state1_idx_arr
         self.scenarios = scenarios
+        self.state1_idx_arr = state1_idx_arr
         self.dummy1_idx_arr = dummy1_idx_arr
         self.rand1_idx_arr = rand1_idx_arr
         assert self.scenarios.shape[1] == len(self.rand1_idx_arr), \
             "Input scenario dim (%d) does not match rand dim (%d)" % (self.scenarios.shape[1], len(self.rand1_idx_arr))
-
-        # SA-type method
-        for k in range(num_second_stage):
-            mdl = gp.Model()
-
-            # first-stage
-            x1 = mdl.addMVar(n1, lb=x1_lb_arr, ub=x1_ub_arr)
-            ctg = mdl.addVar(lb=1e-6)
-            # TODO: Find a better lower bound
-            for i,sense in enumerate(sense1_arr):
-                constr = mdl.addConstr(A1[i,:]@x1 == b1[i])
-                constr.sense = sense
-                if i in dummy1_idx_arr:
-                    pass
-                if i in dummy1_idx_arr and sense != '=':
-                    raise Exception("Expected equality constraint for dummy variable")
-
-            # second-stage
-            x2 = mdl.addMVar(n2, lb=x2_lb_arr, ub=x2_ub_arr)
-            (c2,A2,b2) = get_stochastic_lp2_params()
-            for i,sense in enumerate(sense2_arr):
-                # should not have put B2@x1
-                constr = mdl.addConstr(A2[i,:]@x2 + B2[i,:]@x1 == b2[i])
-                constr.sense = sense
-
-            mdl.setObjective(c1@x1 + c2@x2 + lam*ctg)
-            mdl.update()
-            mdl.setParam('LogToConsole', 0)
-
-            # check model is solvable
-            # mdl.optimize()
-            # if mdl.status != gp.GRB.OPTIMAL:
-            #     raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
-
-            # save
-            self.mdl_arr += [mdl]
-            self.x_arr   += [x1]
-            self.ctg_arr += [ctg]
 
     def get_gurobi_model(self):
         return None
@@ -600,54 +567,43 @@ class PDSAEvalSA(GenericSolver):
     def solve(self, x_prev, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
         assert len(self.dummy1_idx_arr) == len(x_prev), "Input state dim (%d) does not match dummy dim (%d)" % (len(x_prev), len(self.dummy1_idx_arr))
 
-        # pick random second stage scenario
-        j = self.rng.integers(1, len(self.mdl_arr), endpoint=False)
-        mdl = self.mdl_arr[j]
-        x   = self.x_arr[j]
-        ctg = self.ctg_arr[j]
-
         for i, idx in enumerate(self.dummy1_idx_arr):
-            mdl.setAttr("RHS", 
-                    mdl.getConstrs()[idx],
+            self.mdl.setAttr("RHS", 
+                    self.mdl.getConstrs()[idx],
                     x_prev[i])
 
         # Setup uncertainity RHS
         for i, idx in enumerate(self.rand1_idx_arr):
-            mdl.setAttr("RHS", 
-                    mdl.getConstrs()[idx],
+            self.mdl.setAttr("RHS", 
+                    self.mdl.getConstrs()[idx],
                     self.scenarios[ver][i])
 
         # Solve
-        mdl.optimize()
+        self.mdl.update() 
+        self.mdl.optimize()
 
-        if mdl.status != gp.GRB.OPTIMAL:
-            raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
+        if self.mdl.status != gp.GRB.OPTIMAL:
+            raise Exception("LP did not terminate as optimal, got %s" % self.mdl.status)
 
-        mdl.update() # reset model for future solves
-        x_sol = x.X[self.state1_idx_arr]
-        val = mdl.objVal # getObjective().getValue()
-        ctg = ctg.X
+        x_vars = self.mdl.getVars()
+        x_sol = np.array([x_vars[i].X for i in self.state1_idx_arr])
+        val = self.mdl.objVal # getObjective().getValue()
+        ctg = self.ctg.X
         grad = np.zeros(len(x_sol))
 
         return [x_sol, val, grad, ctg]
 
     def add_cut(self, val, grad, x_prev):
         self.save_cut(val, grad, x_prev)
-        for i, mdl in enumerate(self.mdl_arr):
-            ctg = self.ctg_arr[i]
-            x   = self.x_arr[i]
-            mdl.addConstr(ctg - grad@x[self.state1_idx_arr] >= val-grad@x_prev)
+        x = gp.MVar.fromlist(self.mdl.getVars())
+        self.mdl.addConstr(self.ctg - grad@x[self.state1_idx_arr] >= val-grad@x_prev)
 
     def load_cuts(self, val_arr, grad_arr, x_prev_arr):
         super().load_cuts(val_arr, grad_arr, x_prev_arr)
+        x = gp.MVar.fromlist(self.mdl.getVars())
+        self.mdl.addConstr(self.ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.einsum('ij,ij->i', grad_arr, x_prev_arr))
 
-        for i, mdl in enumerate(self.mdl_arr):
-            ctg = self.ctg_arr[i]
-            x   = self.x_arr[i]
-            # See PDSAEvalSA:load_cuts
-            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.einsum('ij,ij->i', grad_arr, x_prev_arr))
-
-class FixedControlEval(GenericSolver):
+class FixedEval(GenericSolver):
     """ 
     Uses SA-type evaluation for PDSA solution.
 
@@ -661,71 +617,40 @@ class FixedControlEval(GenericSolver):
     :params get_stochastic_lp2_params: function that returns random data (c2,A2,b2) for stage 2
     :params num_second_stage: number of scenarios to pre-samples for second stage
     """
-    def __init__(self, lam,
-            c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, ctrl1_idx_arr, # first-stage
-            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
-            seed, num_second_stage, u_0, u_t
+    def __init__(
+            self, lam, mdl, state1_idx_arr, x1_bnd_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, ctrl1_idx_arr,
+            # c1, A1, b1, B1, state1_idx_arr, x1_bnd_arr, sense1_arr, scenarios, rand1_idx_arr, dummy1_idx_arr, ctrl1_idx_arr, # first-stage
+            # get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, # second-stage
+            # seed, num_second_stage, 
+            use_pid, target_s, kp, ki, kd,
     ): 
-        M_h = la.norm(c1)
+        # setup fixed control
+        self.t = 0
+        self.use_pid = use_pid
+        self.target_s = target_s
+        assert (not use_pid or (target_s is not None)), "PID must be given non-empty target_s, received None"
+        self.prev_error = 0
+        self.integral = 0
+        self.dt = 0.1
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.err_history = []
+
+        M_h = 0. # la.norm(c1)
         x_lb_arr = x1_bnd_arr[0][state1_idx_arr]
         x_ub_arr = x1_bnd_arr[1][state1_idx_arr]
         super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
 
-        # setup fixed control
-        self.t = 0
-        self.fixed_u_0 = np.array(u_0)
-        self.fixed_u_t = np.array(u_t)
-
-        x1_lb_arr = x1_bnd_arr[0]
-        x1_ub_arr = x1_bnd_arr[1]
-        x2_lb_arr = x2_bnd_arr[0]
-        x2_ub_arr = x2_bnd_arr[1]
-        n_prev = B1.shape[1]
-        n1 = len(x1_lb_arr)
-        n2 = len(x2_lb_arr)
-        self.mdl_arr = []
-        self.x_arr = []
-        self.ctg_arr = []
-
-        self.rng = np.random.default_rng(seed)
-        self.state1_idx_arr = state1_idx_arr
+        self.mdl = mdl
+        self.mdl.setParam('LogToConsole', 0)
         self.scenarios = scenarios
+        self.state1_idx_arr = state1_idx_arr
         self.dummy1_idx_arr = dummy1_idx_arr
         self.rand1_idx_arr = rand1_idx_arr
         self.ctrl1_idx_arr = ctrl1_idx_arr
         assert self.scenarios.shape[1] == len(self.rand1_idx_arr), \
             "Input scenario dim (%d) does not match rand dim (%d)" % (self.scenarios.shape[1], len(self.rand1_idx_arr))
-
-        for k in range(num_second_stage):
-            mdl = gp.Model()
-
-            # first-stage
-            x1 = mdl.addMVar(n1, lb=x1_lb_arr, ub=x1_ub_arr)
-            ctg = mdl.addVar(lb=1e-6)
-            # TODO: Find a better lower bound
-            for i,sense in enumerate(sense1_arr):
-                constr = mdl.addConstr(A1[i,:]@x1 == b1[i])
-                constr.sense = sense
-                if i in dummy1_idx_arr:
-                    pass
-                if i in dummy1_idx_arr and sense != '=':
-                    raise Exception("Expected equality constraint for dummy variable")
-
-            # second-stage
-            x2 = mdl.addMVar(n2, lb=x2_lb_arr, ub=x2_ub_arr)
-            (c2,A2,b2) = get_stochastic_lp2_params()
-            for i,sense in enumerate(sense2_arr):
-                # should not have put B2@x1
-                constr = mdl.addConstr(A2[i,:]@x2 + B2[i,:]@x1 == b2[i])
-                constr.sense = sense
-
-            mdl.setObjective(c1@x1 + c2@x2 + lam*ctg)
-            mdl.update()
-
-            # save
-            self.mdl_arr += [mdl]
-            self.x_arr   += [x1]
-            self.ctg_arr += [ctg]
 
     def get_gurobi_model(self):
         return None
@@ -745,61 +670,55 @@ class FixedControlEval(GenericSolver):
     def solve(self, x_prev, ver) -> Tuple[np.ndarray, float, np.ndarray, float]:
         assert len(self.dummy1_idx_arr) == len(x_prev), "Input state dim (%d) does not match dummy dim (%d)" % (len(x_prev), len(self.dummy1_idx_arr))
 
-        # pick random second stage scenario
-        j = self.rng.integers(1, len(self.mdl_arr), endpoint=False)
-        mdl = self.mdl_arr[j]
-        x   = self.x_arr[j]
-        ctg = self.ctg_arr[j]
-
         # Setup previous variable
         for i, idx in enumerate(self.dummy1_idx_arr):
-            mdl.setAttr("RHS", 
-                    mdl.getConstrs()[idx],
+            self.mdl.setAttr("RHS", 
+                    self.mdl.getConstrs()[idx],
                     x_prev[i])
 
         # Setup uncertainity RHS
         for i, idx in enumerate(self.rand1_idx_arr):
-            mdl.setAttr("RHS", 
-                    mdl.getConstrs()[idx],
+            self.mdl.setAttr("RHS", 
+                    self.mdl.getConstrs()[idx],
                     self.scenarios[ver][i])
 
         # Set the control variable
-        u = self.fixed_u_0 if self.t == 0 else self.fixed_u_t
-        u = np.clip(u, -25-(x_prev-self.scenarios[ver]), 50-(x_prev-self.scenarios[ver]))
-        for i, idx in enumerate(self.ctrl1_idx_arr):
-            x[idx].lb = u[i]
-            x[idx].ub = u[i]
+        x = self.mdl.getVars()
+        if self.use_pid:
+            # compute pid controller
+            error = self.target_s - x_prev
+            self.t += 1
+            self.err_history += [la.norm(error)]
+            self.integral += error * self.dt
+            derivative = (error - self.prev_error)/self.dt
+            u = self.kp*error + self.ki*self.integral + self.kd * derivative
+
+            u = np.clip(u, -25-(x_prev-self.scenarios[ver]), 50-(x_prev-self.scenarios[ver]))
+            for i, idx in enumerate(self.ctrl1_idx_arr):
+                x[idx].setAttr("LB", u[i])
+                x[idx].setAttr("UB", u[i])
+                # x[idx].lb = u[i] <- this does not set lower bound
+                # x[idx].ub = u[i]
 
         # Solve
-        mdl.update()
-        mdl.optimize()
+        self.mdl.update()
+        self.mdl.optimize()
 
-        if mdl.status != gp.GRB.OPTIMAL:
-            raise Exception("LP did not terminate as optimal, got %s" % mdl.status)
+        if self.mdl.status != gp.GRB.OPTIMAL:
+            raise Exception("LP did not terminate as optimal, got %s" % self.mdl.status)
 
-        mdl.update() # reset model for future solves
-        x_sol = x.X[self.state1_idx_arr]
-        val = mdl.objVal # getObjective().getValue()
-        ctg = ctg.X
+        x_sol = np.array([x[i].X for i in self.state1_idx_arr]) # x.X[self.state1_idx_arr]
+        val = self.mdl.objVal # getObjective().getValue()
+        ctg = 0
         grad = np.zeros(len(x_sol))
 
         return [x_sol, val, grad, ctg]
 
     def add_cut(self, val, grad, x_prev):
         self.save_cut(val, grad, x_prev)
-        for i, mdl in enumerate(self.mdl_arr):
-            ctg = self.ctg_arr[i]
-            x   = self.x_arr[i]
-            mdl.addConstr(ctg - grad@x[self.state1_idx_arr] >= val-grad@x_prev)
 
     def load_cuts(self, val_arr, grad_arr, x_prev_arr):
         super().load_cuts(val_arr, grad_arr, x_prev_arr)
-
-        for i, mdl in enumerate(self.mdl_arr):
-            ctg = self.ctg_arr[i]
-            x   = self.x_arr[i]
-            # See PDSAEvalSA:load_cuts
-            mdl.addConstr(ctg - grad_arr@x[self.state1_idx_arr] >= val_arr-np.diag(grad_arr@x_prev_arr.T))
 
 class LowerBoundModel:
     def __init__(self, n, initial_lb=None):

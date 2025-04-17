@@ -103,15 +103,9 @@ def get_eddp_problem(settings):
             )
         elif settings['prob_name'] == 'hierarchical_inventory':
             prob_solver_arr[t], x_0 = opt_setup.create_hierarchical_inventory_gurobi_model(
-                settings['N'], 
-                settings['lam'], 
-                settings['prob_seed'],
-                settings['k1'], 
-                settings['k2'], 
-                settings['eta1_scale'], 
-                settings['tau1_scale'], 
-                settings['eta2_scale'], 
+                seed=settings['prob_seed'],
                 has_ctg=t<settings['T']-1, 
+                **settings,
             )
         else:
             raise Exception("Unknown prob_name %s" % settings['prob_name'])
@@ -173,11 +167,9 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
 
         # check termination
         x_0_sol = agg_x[0]
-        if (not reached_opt_sat) and S.get(x_0_sol) <= 1:
+        if (not reached_opt_sat) and S.get(x_0_sol) <= 0:
             reached_opt_sat = True
-            print("Optimal solution reached saturation level 1, consider choosing smaller epsilon")
-            # n_iters_ran = k
-            # break
+            print("Saturation level T=0, consider larger T=%d or smaller epsilon=%.2e" % (settings['T'], settings['eps']))
 
         fwd_time_arr[k] = fwd_time_arr[k-1] + time.time() - s_time
 
@@ -342,7 +334,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
         eval_time_arr[(n_iters+1)*T2] = eval_time_arr[(n_iters+1)*T2-1] + time.time() - s_time
         total_time_arr[(n_iters+1)*T2] = time.time() - s0_time
 
-        if total_time_arr[(n_iters-1)*T2] >= settings['time_limit']:
+        if total_time_arr[(n_iters+1)*T2] >= settings['time_limit']:
             n_iters_ran = (n_iters+1)*T2
             break
 
@@ -429,13 +421,17 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
     elif settings['mode'] == utils.Mode.INF_SDDP:
         i_select = i_rand = settings["rng"].integers(0, settings["N"], endpoint=True)
         z_next = agg_x[i_rand]
-    elif settings['mode'] == utils.Mode.GCE_INF_EDDP:
+    elif settings['mode'] in [utils.Mode.GCE_INF_EDDP, utils.Mode.G_INF_SDDP]:
         if settings.get('last_reset', 0) == 2*settings['T']:
             i_select = 0
             z_next = agg_x[i_select]
+            settings['last_reset'] = -1
+        elif settings['mode'] == utils.Mode.GCE_INF_EDDP:
+            [z_next, _, i_select] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=False)
         else:
-            [z_next, _, i_select] = S.largest_sat_lvl(agg_x[:], settings["rng"], prioritize_zero=False)
-        settings['last_reset'] = settings.get('last_reset', 0) + 1 if i_select > 0 else 0
+            i_select = i_rand = settings["rng"].integers(1, settings["N"], endpoint=True)
+            z_next = agg_x[i_rand]
+        settings['last_reset'] = settings.get('last_reset', 0)+1
     elif settings['mode'] == utils.Mode.EDDP:
         [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=True)
         i_select += 1
@@ -516,11 +512,11 @@ def HDDP_eval(settings):
     x = x_0
 
     # retrieve and load last policy 
-    folder = settings["log_folder"]
+    cut_folder = settings["cut_folder"]
     if not settings["fixed_eval"]:
-        val_arr    = np.squeeze(pd.read_csv(os.path.join(folder, "vals.csv")).to_numpy())
-        grad_arr   = pd.read_csv(os.path.join(folder, "grad.csv")).to_numpy()
-        x_prev_arr = pd.read_csv(os.path.join(folder, "x_prev.csv")).to_numpy()
+        val_arr    = np.squeeze(pd.read_csv(os.path.join(cut_folder, "vals.csv")).to_numpy())
+        grad_arr   = pd.read_csv(os.path.join(cut_folder, "grad.csv")).to_numpy()
+        x_prev_arr = pd.read_csv(os.path.join(cut_folder, "x_prev.csv")).to_numpy()
 
         time_limit = settings.get("policy_by_time", np.inf)
         if time_limit == 0:
@@ -529,7 +525,7 @@ def HDDP_eval(settings):
         else:
             val_idx = time_idx = len(val_arr) 
             val_threshold = 1e16
-            elpsed_time_arr = pd.read_csv(os.path.join(folder, "elpsed_times.csv"))["# total_time"].to_numpy()
+            elpsed_time_arr = pd.read_csv(os.path.join(cut_folder, "elpsed_times.csv"))["# total_time"].to_numpy()
             if np.max(elpsed_time_arr) > time_limit:
                 time_idx = np.argmax(elpsed_time_arr >= time_limit)
             if np.max(val_arr) > val_threshold:
@@ -545,10 +541,10 @@ def HDDP_eval(settings):
     for t in range(settings['eval_T']):
         (x, val, _, ctg) = prob_solver.solve(x, i) 
         curr_cost = val - settings['lam']*ctg
-        cum_cost_arr[t] = curr_cost + settings['lam'] * prev_cum_cost 
+        cum_cost_arr[t] = (settings['lam']**t)*curr_cost + prev_cum_cost # + settings['lam'] * prev_cum_cost 
         prev_cum_cost = cum_cost_arr[t]
         i = i_selector.integers(1, settings['N'], endpoint=True)
 
     # save in file
     print("Final cumulative score over %d periods with discount %.4f: %.6e" % (settings['eval_T'], settings['lam'], cum_cost_arr[-1]))
-    np.savetxt(os.path.join(folder, settings['eval_fname']), np.atleast_2d(cum_cost_arr).T, delimiter=',')
+    np.savetxt(os.path.join(settings['log_folder'], settings['eval_fname']), np.atleast_2d(cum_cost_arr).T, delimiter=',')

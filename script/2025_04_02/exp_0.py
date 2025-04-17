@@ -9,8 +9,8 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 300
-DATE = "2025_01_26"
+MAX_RUNS = 8
+DATE = "2025_04_02"
 EXP_ID  = 0
 
 def parse_sub_runs(sub_runs):
@@ -30,49 +30,66 @@ def parse_sub_runs(sub_runs):
 def setup_setting_files(seed_0, n_seeds, max_iter):
     od = dict([
         ('T', 128),
-        ('eval_T', 10*128),
-        ('N', 50),
+        ('N', 50), # decrease to 25 to make it twice as faster
+        ('N2', 50),
         ('lam', 0.9906),
         ('eps', 1e-3),
         ('max_iter', max_iter),
-        ('time_limit', 7200),
+        ('time_limit', 1000),
         ('prob_seed', seed_0),
         ('alg_seed', seed_0),
         ('mode', int(utils.Mode.EDDP)),
-        ('prob_name', 'hydro'),
+        ('k1', 20),
+        ('k2', 20),
+        ('eta1_scale', 0.1),
+        ('tau1_scale', 0.1),
+        ('eta2_scale', 1.0),
+        ('prob_name', 'hierarchical_inventory'),
+        ('sa_eval', False),
+        ('fixed_eval', False),
     ])
 
-    name_run_id_arr = [("Inf-EDDP", 0), ("CE-Inf-EDDP", 1), ("Gap-Inf-EDDP", 2), ("Inf-SDDP(0)",3), ("SDDP(0)", 14)]
-    prob_date_arr = [('hydro', '2025_01_15'), ('inventory', '2025_01_16')]
-    # first is in-sample, last 29 are out of sample
-    prob_seed_N_arr = [(seed_0, 128)] + [(seed_0+i, od['T']*2) for i in range(1,30)]
+    lam_k1_k2_eta1_eta2_T_arr = [(0.8, 20, 20, 0.1, 1, 24), (0.9906, 100, 20, 1, 0.01, 128)]
+    mode_seed_timelimit_arr = [
+        (int(utils.Mode.INF_EDDP), 0, 1_000,), 
+        (int(utils.Mode.GCE_INF_EDDP), 0, 1_000), 
+        # (int(utils.Mode.INF_SDDP), 0),
+        (int(utils.Mode.G_INF_SDDP), 0, 1_000), 
+        (int(utils.Mode.SDDP), 0, 3_600),
+    ]
 
+    log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
 
+    if not(os.path.exists(log_folder_base)):
+        os.makedirs(log_folder_base)
     if not(os.path.exists(setting_folder_base)):
         os.makedirs(setting_folder_base)
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "mode", "prob", "prob_seed"]
-    row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
+    exp_metadata = ["Exp id", "lam", "mode", "alg_seed"]
+    row_format ="{:>10}|" *(len(exp_metadata)-1) + "{:>10}"
     print("")
-    print("About: In- and out-of-sample performance on inventory and hydro on gamma=0.9906. Out of sample is repeated 30 times. \n")
     print(row_format.format(*exp_metadata))
-    print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
+    print("-" * (11 * len(exp_metadata)))
 
     ct = 0
-    for ((name, run_id), (prob_name, date), (prob_seed, N)) in itertools.product(name_run_id_arr, prob_date_arr, prob_seed_N_arr):
-        od['prob_name'] = prob_name
-        od['prob_seed'] = prob_seed
-        od['N'] = N
-        od['eval_fname'] = "eval_seed=%d.csv" % prob_seed
+    od['h_bnds'] = [0, 500]
+    for ((lam, k1, k2, eta1, eta2, T), (mode, seed, timelim)) in itertools.product(lam_k1_k2_eta1_eta2_T_arr, mode_seed_timelimit_arr):
+        od["lam"] = lam
+        od["k1"] = k1
+        od["k2"] = k2
+        od["eta1_scale"] = od["tau1_scale"] = eta1
+        od["eta2_scale"] = eta2
+        od["alg_seed"] = seed
+        od["T"] = T
+        od["mode"] = mode
+        od["time_limit"] = timelim
 
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
-        log_folder_base = os.path.join("logs", date, "exp_0")
-        od["log_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
-        assert os.path.exists(log_folder_base), "Folder %s does not exist, cannot run evaluation" % log_folder_base
+        od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
 
-        print(row_format.format(ct, name, prob_name, prob_seed))
+        print(row_format.format(ct, od["lam"], od["mode"], od["alg_seed"]))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
@@ -99,7 +116,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     seed_0 = 0
     n_seeds = 1
-    max_iters = 10 if args.work else 50_000
+    max_iters = 10 if args.work else 5_000
 
     if args.setup:
         setup_setting_files(seed_0, n_seeds, max_iters)
@@ -110,6 +127,6 @@ if __name__ == "__main__":
         for i in range(start_run_id, end_run_id):
             settings_file = os.path.join(folder_name, "run_%i.yaml" % i)
             os.system('echo "Running exp id %d"' % i)
-            os.system("python main.py --settings %s --eval" % settings_file)
+            os.system("python main.py --settings %s" % settings_file)
     else:
         print("Neither setup nor run passed. Shutting down...")

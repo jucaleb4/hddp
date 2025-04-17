@@ -74,6 +74,39 @@ def create_inventory_gurobi_model(N, lam, seed, has_ctg=True):
 
     return inventory_solver, x_0
 
+def get_hydrothermal_data():
+    n_regions = 4
+    fname = "./data/"
+    hydro_ = pandas.read_csv(fname + "hydro.csv", index_col=0)
+    demand = pandas.read_csv(fname + "demand.csv", index_col=0)
+    deficit_ = pandas.read_csv(fname + "deficit.csv", index_col=0)
+    exchange_ub = pandas.read_csv(fname + "exchange.csv", index_col=0)
+    exchange_cost = pandas.read_csv(fname + "exchange_cost.csv", index_col=0)
+    thermal_ = [pandas.read_csv(fname + "thermal_{}.csv".format(i),
+        index_col=0) for i in range(n_regions)]
+
+    start_time = time.time()
+
+    # historical rainfall data
+    hist = [pandas.read_csv(fname + "hist_{}.csv".format(i), sep=";") for i in range(n_regions)]
+    hist = pandas.concat(hist, axis=1)
+    hist.dropna(inplace=True)
+    hist.drop(columns='YEAR', inplace=True)
+    scenarios = [hist.iloc[:,12*i:12*(i+1)].transpose().values for i in range(n_regions)]
+    # [region][month][year]
+    scenarios = np.array(scenarios)
+    scenarios = np.mean(scenarios, axis=1)
+
+    assert n_regions == scenarios.shape[0]
+
+    means  = np.mean(scenarios, axis=1)
+    sigmas = np.std(scenarios, axis=1)
+
+    rain_lognorm_std  = np.sqrt(np.log(np.power(np.divide(sigmas,means), 2) + 1))
+    rain_lognorm_mean = np.log(means) - np.square(lognorm_sigmas)/2
+
+    return hydro_, demand, deficit_, exchange_ub, exchange_cost, thermal_, rain_lognorm_mean, rain_lognorm_std,
+
 def create_hydro_thermal_gurobi_model(N, lam, seed, has_ctg=True):
     """ (Single stage) hydro problem. 
 
@@ -157,7 +190,8 @@ def create_hydro_thermal_gurobi_model(N, lam, seed, has_ctg=True):
     c_spill = 0.001 * np.ones(n_regions)
     # hydro = m.addMVar(n_regions, ub=hydro_['UB'][-4:], name="hydro")    
     hydro = model.addMVar(n_regions, name="hydro")    
-    model.addConstrs(hydro[i] <= hydro_['UB'][-i] for i in range(n_regions))
+    for i in range(n_regions):
+        model.addConstrs(hydro[i] <= hydro_['UB'][-i], name="hydro_ub_%d" % i)
 
     c_deficit = np.array([[deficit_['OBJ'][j] for i in range(4)] for j in range(4)])
     deficit = model.addMVar((n_regions,n_regions),
@@ -183,8 +217,12 @@ def create_hydro_thermal_gurobi_model(N, lam, seed, has_ctg=True):
     c_exchange = exchange_cost.values
     exchange = model.addMVar((n_regions+1,n_regions+1), 
                           # ub=exchange_ub.values.flatten(), 
-                          ub=exchange_ub.values, 
+                          # ub=exchange_ub.values, 
                           name="exchange")    
+    for i in range(n_regions):
+        for j in range(n_regions):
+            model.addConstr(exchange[i][j] <= exchange_ub.values[i][j], name="exchange_ub_%d_%d" % (i,j))
+
     thermal_sum = model.addMVar(n_regions, name="thermal_sum")
 
     model.addConstrs(thermal_sum.tolist()[i] == sum(thermal[i].tolist()) for i in range(n_regions))
@@ -321,6 +359,7 @@ def create_hierarchical_inventory_gurobi_model(
     mdl.addConstr(z_t == 0, name="dummy")
     mdl.setObjective(a_costs@o_t + c_arr@u_tt, gp.GRB.MINIMIZE)
     mdl.update()
+    x_firststage = gp.MVar.fromlist(mdl.getVars())
 
     (c,A,b,sense_arr,x_lb_arr,x_ub_arr) = get_cAb_model(mdl)
     x_bnd_arr = np.vstack((x_lb_arr, x_ub_arr))
@@ -386,26 +425,162 @@ def create_hierarchical_inventory_gurobi_model(
         A2[np.ix_(convert_constr_idx,p_var_idx)] = np.multiply(a1,a2) 
         return (c2, np.asarray(A2), b2)
 
+    _n = len(x2_lb_arr)
+    for j in range(N2):
+        (c2_j,A2_j,b2_j) = get_stochastic_lp2_params()
+        x_j = mdl.addMVar(_n, lb=x2_lb_arr, ub=x2_ub_arr, obj=c2_j/N2)
+        mdl.addConstr(A2_j@x_j + B2@x_firststage == b2_j)
+
     if sa_eval:
         hier_inv_solver = solver.PDSAEvalSA(
-            lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
-            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, seed, N2,
+            lam, mdl, state_idx_arr, x_bnd_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, 
         )
     elif fixed_eval:
-        hier_inv_solver = solver.FixedControlEval(
-            lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, ctrl_idx_arr,
-            get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, seed, N2, kwargs['u_0'], kwargs['u_t'],
+        hier_inv_solver = solver.FixedEval(
+            lam, mdl, state_idx_arr, x_bnd_arr, scenarios, rand_constr_idx_arr, dummy_idx_arr, ctrl_idx_arr,
+            kwargs['use_pid'], kwargs.get('target_s'), kwargs.get('kp'), kwargs.get('ki'), kwargs.get('kd'),
         )
     else:
+        ctg_bnds = np.array(kwargs['h_bnds'])/(1.-lam)
         hier_inv_solver = solver.PDSASolverForLPs(
             lam, c, A, b, B, state_idx_arr, x_bnd_arr, sense_arr, scenarios, rand_constr_idx_arr,
             get_stochastic_lp2_params, B2, x2_bnd_arr, sense2_arr, 
-            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg,
+            k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg, ctg_bnds,
         )
 
     x_0 = 50*rng.uniform(size=n)
 
     return hier_inv_solver, x_0
+
+def create_hierarchical_hydrothermal_gurobi_model(
+        N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, has_ctg=True, 
+        sa_eval=False, fixed_eval=False, N2=0, **kwargs,
+    ):
+    """ Creates basic hierarchical inventory problem 
+
+    See solver:PDSASolverForLPs for more details on some of the hyperparameters.
+
+    :param N: scenario count
+    :param lam: discount factor
+    :param seed: seeding for random scenarios
+    """
+
+    hydro_, demand, deficit_, exchange_ub, exchange_cost, thermal_, rain_lognorm_mean, rain_lognorm_std = get_hydrothermal_data()
+
+    # rng.lognormal(mean=rain_lognorm_mean[i], sigma=rain_lognorm_std[i])
+    demand = np.mean(demand, axis=0)
+
+    # define Gurobi model
+    model = gp.Model()
+
+    # stored_now = m.addMVar(n_regions, ub=hydro_['UB'][:n_regions], name="stored")
+    now_var_name = "stored"
+    stored_now = model.addMVar(n_regions, name=now_var_name)
+    now_var_name_arr = ["{}[{}]".format(now_var_name, i) for i in range(n_regions)]
+    model.addConstrs(stored_now[i] <= hydro_['UB'][i] for i in range(n_regions))
+    x_ub_arr = hydro_['UB'].to_numpy()[:4]
+    x_lb_arr = np.zeros(len(x_ub_arr))
+
+    past_state_for_max_val = np.zeros(len(now_var_name))
+    past_state_for_min_val = hydro_['UB']
+
+    stored_past= model.addMVar(n_regions, name="stored_past")
+    spill = model.addMVar(n_regions, name="spill")
+    c_spill = 0.001 * np.ones(n_regions)
+    hydro = model.addMVar(n_regions, name="hydro")    
+    for i in range(n_regions):
+        # make this a variable
+        model.addConstrs(hydro[i] <= hydro_['UB'][-i], name="hydro_ub_%d" % i)
+
+    c_deficit = np.array([[deficit_['OBJ'][j] for i in range(4)] for j in range(4)])
+    deficit = model.addMVar((n_regions,n_regions), name = "deficit")
+    model.addConstrs(deficit[i][j] <= demand[i] * deficit_['DEPTH'][j] 
+                for i in range(n_regions) for j in range(n_regions))
+
+    thermal = [None] * n_regions
+    c_thermal = [None] * n_regions
+    for i in range(n_regions):
+        thermal[i] = model.addMVar(len(thermal_[i]), name="thermal_{}".format(i))
+        model.addConstrs(thermal[i][j] <= thermal_[i]['UB'][j] for j in range(len(thermal_[i])))
+        model.addConstrs(-thermal[i][j] <= -thermal_[i]['LB'][j] for j in range(len(thermal_[i])))
+        c_thermal[i] = np.array(thermal_[i]['OBJ'])
+
+    c_exchange = exchange_cost.values
+    exchange = model.addMVar((n_regions+1,n_regions+1), name="exchange")    
+    for i in range(n_regions):
+        for j in range(n_regions):
+            # make this a variable
+            model.addConstr(exchange[i][j] <= exchange_ub.values[i][j], name="exchange_ub_%d_%d" % (i,j))
+
+    thermal_sum = model.addMVar(n_regions, name="thermal_sum")
+
+    model.addConstrs(thermal_sum.tolist()[i] == sum(thermal[i].tolist()) for i in range(n_regions))
+    
+    for i in range(n_regions):
+        model.addConstrs(
+            thermal_sum[i] 
+            + sum(deficit[i,j] for j in range(n_regions)) 
+            + hydro[i] 
+            - sum(exchange[i,j] for j in range(n_regions+1))
+            + sum(exchange[j,i] for j in range(n_regions+1)) == demand[i],
+            name="demand_%d" % i,
+        )
+    model.addConstr(
+            sum(exchange[j,n_regions] for j in range(n_regions+1)) 
+            - sum(exchange[n_regions,j] for j in range(n_regions+1)) 
+            == 0
+    )
+        
+    model.addConstr(
+            stored_now + spill + hydro - stored_past == np.zeros(n_regions), 
+            name="rain")
+
+    model.setObjective(c_spill@spill 
+                   + sum(c_deficit[i]@deficit[i] for i in range(n_regions))
+                   + sum(c_exchange[i]@exchange[i] for i in range(n_regions+1))
+                   + sum(c_thermal[i]@thermal[i] for i in range(n_regions)),
+                   gp.GRB.MINIMIZE)
+
+    # Last state variable constraint as dummy variable
+    model.addConstr(np.eye(n_regions)@stored_past == np.zeros(n_regions), name="dummy")
+
+    model.setObjective(c_spill@spill 
+                   + sum(c_deficit[i]@deficit[i] for i in range(n_regions))
+                   + sum(c_exchange[i]@exchange[i] for i in range(n_regions+1))
+                   + sum(c_thermal[i]@thermal[i] for i in range(n_regions)),
+                   gp.GRB.MINIMIZE)
+
+    M_h = la.norm(c_spill, ord=1)
+    for i in range(n_regions):
+        M_h += la.norm(c_deficit[i], ord=1) 
+        M_h += la.norm(c_exchange[i], ord=1) 
+        M_h += la.norm(c_thermal[i], ord=1)
+    M_h += la.norm(c_exchange[n_regions], ord=1)
+
+    model.update()
+
+    x_0 = hydro_['INITIAL'][:n_regions].to_numpy()
+
+    def get_stochastic_lp2_params():
+        b2 = ...
+        return (c2, np.asarray(A2), b2)
+
+    hydro_solver = solver.GurobiSolver(
+        model, 
+        stored_now, 
+        now_var_name_arr,
+        lam, 
+        scenarios,
+        M_h,
+        x_lb_arr,
+        x_ub_arr,
+        h_min_val=0,
+        past_state_for_min_val=past_state_for_min_val if has_ctg else None,
+        past_state_for_max_val=past_state_for_max_val if has_ctg else None
+    )
+
+    return hydro_solver, x_0
+
 
 def create_hierarchical_test_gurobi_model(
         N, lam, seed, k1, k2, eta1_scale, tau1_scale, eta2_scale, 
