@@ -55,7 +55,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         (int(utils.Mode.GCE_INF_EDDP), 0, 1_000), 
         # (int(utils.Mode.INF_SDDP), 0),
         (int(utils.Mode.G_INF_SDDP), 0, 1_000), 
-        (int(utils.Mode.SDDP), 0, 3_600),
+        (int(utils.Mode.P_SDDP), 0, 3_600),
     ]
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)

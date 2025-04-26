@@ -40,9 +40,10 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('alg_seed', seed_0),
         ('mode', int(utils.Mode.EDDP)),
         ('prob_name', 'hydro'),
+        ('fixed_eval', False),
     ])
 
-    name_run_id_arr = [("Inf-EDDP", 0), ("CE-Inf-EDDP", 1), ("Gap-Inf-EDDP", 2), ("Inf-SDDP(0)",3), ("SDDP(0)", 14)]
+    name_run_id_arr = [("Inf-EDDP", 0), ("CE-Inf-EDDP", 1), ("Gap-Inf-EDDP", 2), ("Inf-SDDP(0)",3), ("P-SDDP(0)", 14)]
     prob_date_arr = [('hydro', '2025_01_15'), ('inventory', '2025_01_16')]
     # first is in-sample, last 29 are out of sample
     prob_seed_N_arr = [(seed_0, 128)] + [(seed_0+i, od['T']*2) for i in range(1,30)]
@@ -70,6 +71,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         log_folder_base = os.path.join("logs", date, "exp_0")
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
+        od["cut_folder"] = os.path.join(log_folder_base, "run_%s" % run_id)
         assert os.path.exists(log_folder_base), "Folder %s does not exist, cannot run evaluation" % log_folder_base
 
         print(row_format.format(ct, name, prob_name, prob_seed))

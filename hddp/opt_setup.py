@@ -17,13 +17,12 @@ def create_inventory_gurobi_model(N, lam, seed, has_ctg=True):
     State (dim=1) x_t: inventory at start of ordering at time t, before demand realized
     Ctrl (dim=5) y_t,u_t,x_t^+,x_t^-: dummy of past, order amount, max(0,x_t), max(0,-x_t)
 
-    min  c*u_t + h*(x_t^+) + b*(x_t^-)
-    s.t. x_t = y_t + u_t - D_t
-         y_t = x_{t-1}
-         x_t^+ >= max(0, x_t)
-         x_t^- >= max(0, -x_t)
+    min  c*u_t + h*(y_t^+) + b*(y_t^-) 
+    s.t. y_t = x_{t-1} - D_t 
+         x_t = y_{t} + u_t
+         y_t^+ >= max(0, y_t)
+         y_t^- >= max(0, -y_t)
          u_t >= 0
-
     """
     h = 0.2
     b = 2.8
@@ -34,24 +33,102 @@ def create_inventory_gurobi_model(N, lam, seed, has_ctg=True):
 
     # define gurobi model
     model = gp.Model()
-    now = model.addMVar(1, lb=-100, ub=100, name="now")
+    now = model.addMVar(1, lb=-100, ub=100, name="now") # quantity post-order
     x_lb_arr = np.array([-100])
     x_ub_arr = np.array([100])
     now_var_name_arr = ["now[0]"]
     past_state_for_max_val = np.array([-100])
 
     past = model.addMVar(1, lb=-100)
-    y = model.addMVar(1, lb=-float('inf')) # quantity we order
-    x_past_pos = model.addMVar(1, lb=0) # over-supply
-    x_past_neg = model.addMVar(1, lb=0) # under-supply
-    u = model.addMVar(1, lb=-float('inf')) # order amount
+    y = model.addMVar(1, lb=-float('inf'), name="y") # quantity post-demand
+    y_pos = model.addMVar(1, lb=0, name="y_pos") # over-supply
+    y_neg = model.addMVar(1, lb=0, name="y_neg") # under-supply
+    u = model.addMVar(1, lb=0, name="u") # order amount
 
-    model.addConstr(-now + (past + u) == 0, name='rand') # .values()
-    model.addConstr(x_past_pos - past >= 0, name='x_pos') # .values()
-    model.addConstr(x_past_neg + past >= 0, name='x_neg') # .values()
+    # model.addConstr(-now + (past + u) == 0, name='rand') # .values()
+    model.addConstr(-y + past == 0, name='rand') # .values()
+    model.addConstr(now - (y + u) == 0) 
+
+    model.addConstr(y_pos - y >= 0, name='y_pos') # .values()
+    model.addConstr(y_neg + y >= 0, name='y_neg') # .values()
     dummy_constrs = model.addConstr(np.eye(1)@past == np.zeros(1), name="dummy") # .values()
 
-    model.setObjective(c*u + b*x_past_neg + h*x_past_pos, gp.GRB.MINIMIZE)
+    model.setObjective(c*u + b*y_neg + h*y_pos, gp.GRB.MINIMIZE)
+    model.update()
+    M_h = c + b + h
+
+    scenarios = np.append([5.5], phi*rng.normal(loc=d, scale=phi, size=N))
+    scenarios = np.atleast_2d(scenarios).T
+    inventory_solver = solver.GurobiSolver(
+        model, 
+        now, 
+        now_var_name_arr,
+        lam, 
+        scenarios,
+        M_h,
+        x_lb_arr,
+        x_ub_arr,
+        h_min_val=0,
+        past_state_for_max_val=past_state_for_max_val if has_ctg else None,
+    )
+
+    x_0 = np.array([0])
+
+    return inventory_solver, x_0
+
+def create_riskadverse_inventory_gurobi_model(N, lam, seed, has_ctg=True):
+    """ Setups basic inventory problem
+
+    State (dim=1) x_t: inventory at start of ordering at time t, before demand realized
+    Ctrl (dim=5) y_t,u_t,x_t^+,x_t^-: dummy of past, order amount, max(0,x_t), max(0,-x_t)
+
+    min  c*u_t + h*(y_t^+) + b*(y_t^-) + C*tau
+    s.t. y_t = x_{t-1} - D_t 
+         x_t = y_{t} + u_t
+         y_t^+ >= max(0, y_t)
+         y_t^- >= max(0, -y_t)
+         y_t^2 - tau <= R
+         u_t >= 0
+         tau >= 0
+
+    Some example values are R = 5 and C = 100
+    """
+    h = 0.2
+    b = 2.8
+    c = np.cos(np.pi/3) + 1.5
+    d = 10.0
+    phi = 1.6
+    rng = np.random.default_rng(seed)
+    R = 5
+    C = 100
+
+    # define gurobi model
+    model = gp.Model()
+    now = model.addMVar(1, lb=-100, ub=100, name="now") # quantity post-order
+    x_lb_arr = np.array([-100])
+    x_ub_arr = np.array([100])
+    now_var_name_arr = ["now[0]"]
+    past_state_for_max_val = np.array([-100])
+
+    past = model.addMVar(1, lb=-100)
+    tau = model.addVar(lb=0)
+    y = model.addVar(lb=-float('inf'), name="y") # quantity post-demand
+    y_pos = model.addMVar(1, lb=0, name="y_pos") # over-supply
+    y_neg = model.addMVar(1, lb=0, name="y_neg") # under-supply
+    u = model.addMVar(1, lb=0, name="u") # order amount
+
+    # model.addConstr(-now + (past + u) == 0, name='rand') # .values()
+    model.addConstr(-y + past == 0, name='rand') # .values()
+    model.addConstr(now - (y + u) == 0) 
+
+    model.addConstr(y_pos - y >= 0, name='y_pos') # .values()
+    model.addConstr(y_neg + y >= 0, name='y_neg') # .values()
+    model.addQConstr(y*y - tau <= R) # .values()
+    dummy_constrs = model.addConstr(np.eye(1)@past == np.zeros(1), name="dummy") # .values()
+
+    model.setObjective(c*u + b*y_neg + h*y_pos + C*tau, gp.GRB.MINIMIZE)
+    # https://docs.gurobi.com/projects/optimizer/en/current/reference/attributes/constraintlinear.html#pi
+    model.setParam('QCPDual', 1)
     model.update()
     M_h = c + b + h
 
@@ -191,7 +268,7 @@ def create_hydro_thermal_gurobi_model(N, lam, seed, has_ctg=True):
     # hydro = m.addMVar(n_regions, ub=hydro_['UB'][-4:], name="hydro")    
     hydro = model.addMVar(n_regions, name="hydro")    
     for i in range(n_regions):
-        model.addConstrs(hydro[i] <= hydro_['UB'][-i], name="hydro_ub_%d" % i)
+        model.addConstr(hydro[i] <= hydro_['UB'][-i], name="hydro_ub_%d" % i)
 
     c_deficit = np.array([[deficit_['OBJ'][j] for i in range(4)] for j in range(4)])
     deficit = model.addMVar((n_regions,n_regions),

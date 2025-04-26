@@ -43,14 +43,14 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
 
     prob_name_arr = ['inventory']
     lam_n_iter_arr = [(0.99, 1_000, 128), (0.8, 100, 24)]
-    mode_seed_arr = [
-        (int(utils.Mode.INF_EDDP), 0), 
-        (int(utils.Mode.CE_INF_EDDP), 0), 
-        (int(utils.Mode.GAP_INF_EDDP), 0)
+    mode_seed_maxitermult_arr = [
+        (int(utils.Mode.INF_EDDP), 0, 1), 
+        (int(utils.Mode.GCE_INF_EDDP), 0, 1), 
+        (int(utils.Mode.GAP_INF_EDDP), 0, 1)
     ]  # 1024 so it does not converge too soon
-    mode_seed_arr += list((int(utils.Mode.INF_SDDP), i)  for i in range(n_seeds))
-    mode_seed_arr += [(int(utils.Mode.EDDP), 0)]
-    mode_seed_arr += list((int(utils.Mode.SDDP), i)  for i in range(n_seeds))
+    mode_seed_maxitermult_arr += list((int(utils.Mode.G_INF_SDDP), i, 1)  for i in range(n_seeds))
+    mode_seed_maxitermult_arr += [(int(utils.Mode.EDDP), 0, 3)]
+    mode_seed_maxitermult_arr += list((int(utils.Mode.P_SDDP), i, 3)  for i in range(n_seeds))
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
@@ -68,10 +68,10 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
 
     ct = 0
-    for (prob_name, (lam, n_iter, T), (mode, alg_seed)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_arr):
+    for (prob_name, (lam, n_iter, T), (mode, alg_seed, maxitermult)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_maxitermult_arr):
         od["prob_name"] = prob_name
         od["lam"] = lam
-        od["max_iter"] = min(max_iter, n_iter)
+        od["max_iter"] = min(max_iter, n_iter) * maxitermult
         od["mode"] = mode
         od["alg_seed"] = alg_seed
         od["T"] = 4*T if mode == int(utils.Mode.GAP_INF_EDDP) else min(T, od["max_iter"]) 

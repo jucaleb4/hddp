@@ -5,6 +5,17 @@ We consider a new generalization called *hierarchical stochastic programs*, wher
 
 In this documentation, we refer to EDDP as explorative dual dynamic programming and its generalization HDDP as hierarchial dual dynamic programming.
 
+## Requirements
+The code uses Python and has the basic requirements:
+```
+gurobipy==12.0.0
+numpy==2.1.0
+pandas==2.2.2
+scipy==1.14.1
+matplotlib==3.9.2
+PyYAML==6.0.2
+```
+
 ## Code structure
 This section briefly discusses the major code components.
 
@@ -25,29 +36,43 @@ python scripts/2025_01_15/exp_0.py --setup
 and the settings file is saved in the `settings` folder. The flag `--setup` indicates we only want to create the settings file, not to execute code with it yet.
 
 Different script files and the type of settings they run are given here:
-- `2025_01_15/exp_0.py`: hydro-thermal planning with all EDDP and Inf-EDDp and variants
+- `2025_01_15/exp_0.py`: hydro-thermal planning with all EDDP and Inf-EDDP and variants
 - `2025_01_16/exp_0.py`: inventory with all EDDP and Inf-EDDP and variants
-- `2025_01_22/exp_0.py`: run hydro-thermal planning SDDP/EDDP longer (50K iterations, vs. previous 2K). 
-- `2025_01_26/exp_0.py`: out-of-sample performance on hydro-thermal
+- `2025_01_22/exp_0.py`: run hydro-thermal planning SDDP/EDDP longer (50K iterations, vs. previous 2K) for final optimality gap. 
+- `2025_01_26/exp_0.py`: out-of-sample performance on inventory and hydro-thermal
 - `2025_03_28/exp_0.py`: tuning for hierarchical inventory management
 - `2025_03_28/exp_1.py`: tuning evaluation of hierarhcical inventory management
-- `2025_03_30/exp_0.py`: out-of-sample performance of hueristics on hierarhcical inventory 
+- `2025_03_30/exp_0.py`: out-of-sample performance of hueristics on hierarchical inventory 
 - `2025_04_02/exp_0.py`: full run of PDSA on hierarchical inventory management (training)
 - `2025_04_02/exp_1.py`: out-of-sample performance of PDSA on hierarchical inventory (testing)
-- `2025_04_03/exp_0.py`: tuning of hydropower generation planning
-- `2025_04_03/exp_1.py`: evaluation of hydropower generation planning
+- ~~`2025_04_03/exp_0.py`: tuning of hydropower generation planning~~ (not yet implemented)
+- ~~`2025_04_03/exp_1.py`: evaluation of hydropower generation planning~~ (not yet implemented)
+- `2025_04_23/exp_0.py`: risk-adverse inventory 
 
-The reason we re-ran SDDP/EDDP (and not their infinite-horizon variants) is because they can run the more iterations in the same time as Inf-EDDP. 
-This is because each time horizon has their own cutting plane model, so each has less cuts (less time tos solve). 
-Note that number of cuts accumulated across all models is the same as in Inf-EDDP.
+The reason we re-ran SDDP/EDDP in the experiments `2025_01_22/exp_0.py` (and not for the infinite-horizon counterparts) is because the non-inf methods require more oracle solves to achieve comparable performance to the infinite-horizon methods.
 
 ## Running scripts
-After creating the settings file, the same script can be used to run the experiments:
+After creating the settings file, the same script can be used to run the experiments, e.g.
 ```
 python scripts/2025_01_15/exp_0.py --run
 ```
+Here, you need to replace the data and experiment number to the one you want. 
+Since running all experiments within a script can take a long time, you can run a subset of them using ``--sub_runs''. 
+Use the `--help` command for more details.
 
 ## Plotting
-TODO
+See `/plots`.
 
 ## Citation
+If you find this code useful, please cite our paper:
+```
+@misc{ju2023dualdynamicprogrammingstochastic,
+      title={Dual dynamic programming for stochastic programs over an infinite horizon},
+      author={Caleb Ju and Guanghui Lan},
+      year={2023},
+      eprint={2303.02024},
+      archivePrefix={arXiv},
+      primaryClass={math.OC},
+      url={https://arxiv.org/abs/2303.02024},
+}
+```

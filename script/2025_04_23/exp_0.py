@@ -9,8 +9,8 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 4
-DATE = "2025_01_22"
+MAX_RUNS = 48
+DATE = "2025_04_23"
 EXP_ID  = 0
 
 def parse_sub_runs(sub_runs):
@@ -31,18 +31,26 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     od = dict([
         ('T', 128),
         ('N', 50),
-        ('lam', 0.9906),
+        ('lam', 0.99),
         ('eps', 1e-3),
         ('max_iter', max_iter),
         ('time_limit', 7200),
         ('prob_seed', seed_0),
         ('alg_seed', seed_0),
-        ('mode', int(utils.Mode.EDDP)),
+        ('mode', int(utils.Mode.INF_EDDP)),
         ('prob_name', 'hydro'),
     ])
 
-    lam_niter_T_arr = [(0.8, 200, 24), (0.9906, 750, 128)]
-    mode_arr = [int(utils.Mode.EDDP), int(utils.Mode.P_SDDP)]
+    prob_name_arr = ['riskadverse_inventory']
+    lam_n_iter_arr = [(0.99, 1_000, 128), (0.8, 100, 24)]
+    mode_seed_maxitermult_arr = [
+        (int(utils.Mode.INF_EDDP), 0, 1), 
+        (int(utils.Mode.GCE_INF_EDDP), 0, 1), 
+        (int(utils.Mode.GAP_INF_EDDP), 0, 1)
+    ]  # 1024 so it does not converge too soon
+    mode_seed_maxitermult_arr += list((int(utils.Mode.G_INF_SDDP), i, 1)  for i in range(n_seeds))
+    mode_seed_maxitermult_arr += [(int(utils.Mode.EDDP), 0, 3)]
+    mode_seed_maxitermult_arr += list((int(utils.Mode.P_SDDP), i, 3)  for i in range(n_seeds))
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
     setting_folder_base = os.path.join("settings", DATE, "exp_%s" % EXP_ID)
@@ -53,23 +61,25 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         os.makedirs(setting_folder_base)
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "lam", "n_iters", "mode"]
+    exp_metadata = ["Exp id", "prob_name", "lam", "mode", "alg_seed"]
     row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
     print("")
     print(row_format.format(*exp_metadata))
     print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
 
     ct = 0
-    for ((lam, max_iter, T), mode) in itertools.product(lam_niter_T_arr, mode_arr):
+    for (prob_name, (lam, n_iter, T), (mode, alg_seed, mult)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_maxitermult_arr):
+        od["prob_name"] = prob_name
         od["lam"] = lam
-        od["max_iter"] = max_iter * T
-        od["T"] = T
+        od["max_iter"] = mult*min(max_iter, n_iter)
         od["mode"] = mode
+        od["alg_seed"] = alg_seed
+        od["T"] = 4*T if mode == int(utils.Mode.GAP_INF_EDDP) else min(T, od["max_iter"]) 
 
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
 
-        print(row_format.format(ct, od["lam"], od["max_iter"], od["mode"]))
+        print(row_format.format(ct, od["prob_name"], od["lam"], od["mode"], od["alg_seed"]))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
@@ -95,8 +105,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     seed_0 = 0
-    n_seeds = 1
-    max_iters = 10 if args.work else 50_000
+    n_seeds = 10
+    max_iters = 10 if args.work else 1_000
 
     if args.setup:
         setup_setting_files(seed_0, n_seeds, max_iters)

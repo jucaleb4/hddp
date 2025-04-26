@@ -30,6 +30,7 @@ class Mode(IntEnum):
     GCE_INF_EDDP = 5
     SDDP = 6
     G_INF_SDDP = 7
+    P_SDDP = 8
 
 class SaturatedSet:
 

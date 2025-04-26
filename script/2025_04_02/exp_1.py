@@ -50,7 +50,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('fixed_eval', False),
     ])
 
-    # 4 runs: Inf-EDDP, CE-Inf-EDDP, Inf-SDDP, and SDDP
+    # 4 runs: Inf-EDDP, CE-Inf-EDDP, Inf-SDDP, and P-SDDP
     run_cut_id_lam_T_arr = [(i, i, 0.8, 24) for i in range(4)]
     # run_cut_id_lam_T_arr = [(i, 3, 0.8, 24) for i in range(4)]
     run_cut_id_lam_T_arr += [(i+4, i+4, 0.9906, 128) for i in range(4)]

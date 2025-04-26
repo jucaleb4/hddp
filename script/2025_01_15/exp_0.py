@@ -46,7 +46,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     mode_seed_arr += list((int(utils.Mode.INF_SDDP), i)  for i in range(n_seeds))
     mode_seed_arr += [(int(utils.Mode.EDDP), 0)]
     mode_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), 0)] # only for lam=0.8
-    mode_seed_arr += list((int(utils.Mode.SDDP), i)  for i in range(n_seeds))
+    mode_seed_arr += list((int(utils.Mode.P_SDDP), i)  for i in range(n_seeds))
     prob_name_arr = ['hydro']
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)

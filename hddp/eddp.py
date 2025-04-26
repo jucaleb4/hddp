@@ -33,7 +33,7 @@ def fill_in_settings(x_0, settings, prob_solver):
 def HDDP_multiproc(settings, n_procs):
     setup_qs = False
 
-    if settings['mode'] in [utils.Mode.EDDP, utils.Mode.SDDP]:
+    if settings['mode'] in [utils.Mode.EDDP, utils.Mode.SDDP, utils.Mode.P_SDDP]:
         [q_host, q_child, ps, settings] = init_workers(settings, n_procs)
         setup_qs = True
         _EDDP(settings, n_procs, q_host, q_child)
@@ -69,6 +69,8 @@ def get_problem(settings):
         return opt_setup.create_portfolio_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
     elif settings['prob_name'] == 'inventory':
         return opt_setup.create_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
+    elif settings['prob_name'] == 'riskadverse_inventory':
+        return opt_setup.create_riskadverse_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
     elif settings['prob_name'] == 'hierarchical_inventory':
         return opt_setup.create_hierarchical_inventory_gurobi_model(seed=settings['prob_seed'], **settings)
     elif settings['prob_name'] == 'hierarchical_test':
@@ -76,9 +78,9 @@ def get_problem(settings):
     else:
         raise Exception("Unknown prob_name %s" % settings['prob_name'])
 
-def get_eddp_problem(settings):
+def get_eddp_problem(settings, T):
     """ Returns T instance of prob_solver (for each stage) """
-    prob_solver_arr = [None,] * settings['T']
+    prob_solver_arr = [None,] * T
     for t in range(len(prob_solver_arr)):
         if settings['prob_name'] == 'hydro':
             prob_solver_arr[t], x_0 = opt_setup.create_hydro_thermal_gurobi_model(
@@ -96,6 +98,13 @@ def get_eddp_problem(settings):
             )
         elif settings['prob_name'] == 'inventory':
             prob_solver_arr[t], x_0 = opt_setup.create_inventory_gurobi_model(
+                settings['N'], 
+                settings['lam'], 
+                settings['prob_seed'],
+                has_ctg=t<settings['T']-1,
+            )
+        elif settings['prob_name'] == 'riskadverse_inventory':
+            prob_solver_arr[t], x_0 = opt_setup.create_riskadverse_inventory_gurobi_model(
                 settings['N'], 
                 settings['lam'], 
                 settings['prob_seed'],
@@ -227,7 +236,10 @@ def _EDDP(settings, n_procs, q_host, q_child):
     """
     Parallel variant of Lan's EDDP. See `_HDDP_multiproc for more details.
     """
-    prob_solver_arr, x_0 = get_eddp_problem(settings)
+    num_solvers = settings['T']
+    if settings['mode'] == utils.Mode.P_SDDP:
+        num_solvers = 1
+    prob_solver_arr, x_0 = get_eddp_problem(settings, num_solvers)
     fill_in_settings(x_0, settings, prob_solver_arr[0])
 
     S = utils.SaturatedSet(**settings)
@@ -283,7 +295,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
         x_curr = x_0
         for t in range(T):
             s_time = time.time()
-            temp = solve_scenarios(prob_solver_arr[t], x_0, x_curr, start_scenario_idx, end_scenario_idx)
+            temp = solve_scenarios(prob_solver_arr[t % num_solvers], x_0, x_curr, start_scenario_idx, end_scenario_idx)
             [agg_x, agg_val, agg_grad, agg_ctg] = temp
             fwd_time_arr[n_iters*T2+t+1] = fwd_time_arr[n_iters*T2+t] + time.time() - s_time
 
@@ -307,14 +319,14 @@ def _EDDP(settings, n_procs, q_host, q_child):
             select_time_arr[n_iters*T2+T+t_0+1] = select_time_arr[n_iters*T2+T+t_0] + time.time() - s_time
 
             s_time = time.time()
-            temp = solve_scenarios(prob_solver_arr[t], x_0, x_t_prev, start_scenario_idx, end_scenario_idx)
+            temp = solve_scenarios(prob_solver_arr[t % num_solvers], x_0, x_t_prev, start_scenario_idx, end_scenario_idx)
             fwd_time_arr[n_iters*T2+T+t_0+1] = fwd_time_arr[n_iters*T2+T+t_0] + time.time() - s_time
 
             s_time = time.time()
             [agg_x, agg_val, agg_grad, agg_ctg] = temp
             temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, 0, x_0, settings)
             [_, _, _, avg_val, avg_grad] = temp
-            prob_solver_arr[t-1].add_cut(avg_val, avg_grad, x_t_prev)
+            prob_solver_arr[(t-1) % num_solvers].add_cut(avg_val, avg_grad, x_t_prev)
             select_time_arr[n_iters*T2+T+t_0+1] += time.time() - s_time
             total_time_arr[n_iters*T2+T+t_0+1] = time.time() - s0_time
 
@@ -539,6 +551,9 @@ def HDDP_eval(settings):
     i_selector = np.random.default_rng(settings.get('prob_seed',0)+1)
     i = 0
     for t in range(settings['eval_T']):
+        # TEMP
+        if t % 100 == 0:
+            print("[t=%d] x=%s (scen %d)" % (t, x, i))
         (x, val, _, ctg) = prob_solver.solve(x, i) 
         curr_cost = val - settings['lam']*ctg
         cum_cost_arr[t] = (settings['lam']**t)*curr_cost + prev_cum_cost # + settings['lam'] * prev_cum_cost 
