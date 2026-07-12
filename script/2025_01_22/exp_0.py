@@ -69,7 +69,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
 
-        print(row_format.format(ct, od["lam"], od["max_iter"], od["mode"]))
+        print(row_format.format(ct, od["lam"], od["max_iter"], utils.Mode(od["mode"]).name))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])

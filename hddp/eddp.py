@@ -447,15 +447,20 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
     elif settings['mode'] == utils.Mode.EDDP:
         [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=True)
         i_select += 1
-    else:
+    elif settings['mode'] in [utils.Mode.SDDP, utils.Mode.P_SDDP]:
         i_select = i_rand = settings["rng"].integers(1, settings["N"], endpoint=True)
         z_next = agg_x[i_rand]
+    else:
+        raise Exception("Unknown mode %d" % settings['mode'])
 
     x_next = z_next
-    if settings['mode'] == utils.Mode.INF_EDDP and (k % settings['T'] == 0):
-        x_next = x_0
-    # if settings['mode'] == utils.Mode.CE_INF_EDDP and (k % (2*settings['T']) == 0):
-    #     x_next = x_0
+
+    # if settings['mode'] in [utils.Mode.INF_EDDP and (k % settings['T'] == 1):
+        # x_next = x_0 <- convergence proof did not work for this
+    if settings['mode'] in [utils.Mode.INF_EDDP, utils.Mode.EDDP, utils.Mode.SDDP, utils.Mode.P_SDDP] and (k % settings['T'] == 1):
+        x_next = agg_x[0]
+    if settings['mode'] in [utils.Mode.CE_INF_EDDP, utils.Mode.GAP_INF_EDDP, utils.Mode.INF_SDDP] and (k % (2*settings['T']) == 1):
+        x_next = agg_x[0]
 
     return [x_next, z_next, i_select, avg_val, avg_grad]
 

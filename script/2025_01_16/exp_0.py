@@ -45,10 +45,10 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     lam_n_iter_arr = [(0.99, 1_000, 128), (0.8, 100, 24)]
     mode_seed_maxitermult_arr = [
         (int(utils.Mode.INF_EDDP), 0, 1), 
-        (int(utils.Mode.GCE_INF_EDDP), 0, 1), 
+        (int(utils.Mode.CE_INF_EDDP), 0, 1), 
         (int(utils.Mode.GAP_INF_EDDP), 0, 1)
     ]  # 1024 so it does not converge too soon
-    mode_seed_maxitermult_arr += list((int(utils.Mode.G_INF_SDDP), i, 1)  for i in range(n_seeds))
+    mode_seed_maxitermult_arr += list((int(utils.Mode.INF_SDDP), i, 1)  for i in range(n_seeds))
     mode_seed_maxitermult_arr += [(int(utils.Mode.EDDP), 0, 3)]
     mode_seed_maxitermult_arr += list((int(utils.Mode.P_SDDP), i, 3)  for i in range(n_seeds))
 
@@ -62,10 +62,10 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
     exp_metadata = ["Exp id", "prob_name", "lam", "mode", "alg_seed"]
-    row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
+    row_format ="{:>10}|" * (len(exp_metadata)-2) + "{:>15}|{:>10}"
     print("")
     print(row_format.format(*exp_metadata))
-    print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
+    print("-" * ((len(exp_metadata)-1)*10 + 15 + len(exp_metadata)))
 
     ct = 0
     for (prob_name, (lam, n_iter, T), (mode, alg_seed, maxitermult)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_maxitermult_arr):
@@ -79,7 +79,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
 
-        print(row_format.format(ct, od["prob_name"], od["lam"], od["mode"], od["alg_seed"]))
+        print(row_format.format(ct, od["prob_name"], od["lam"], utils.Mode(od["mode"]).name, od["alg_seed"]))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])

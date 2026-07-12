@@ -42,11 +42,14 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     ])
 
     lam_n_iter_arr = [(0.9906, max_iter, 128), (0.8, max_iter//2, 24)]
-    mode_seed_arr = [(int(utils.Mode.INF_EDDP), 0), (int(utils.Mode.CE_INF_EDDP), 0), (int(utils.Mode.GAP_INF_EDDP), 0)] 
-    mode_seed_arr += list((int(utils.Mode.INF_SDDP), i)  for i in range(n_seeds))
-    mode_seed_arr += [(int(utils.Mode.EDDP), 0)]
-    mode_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), 0)] # only for lam=0.8
-    mode_seed_arr += list((int(utils.Mode.P_SDDP), i)  for i in range(n_seeds))
+    mode_name_seed_arr = [
+        (int(utils.Mode.INF_EDDP), "INF_EDDP", 0), 
+        (int(utils.Mode.CE_INF_EDDP), "CE_INF_EDDP", 0), 
+        (int(utils.Mode.GAP_INF_EDDP), "GAP_INF_EDDP", 0)] 
+    mode_name_seed_arr += list((int(utils.Mode.INF_SDDP), "CE_INF_SDDP", i)  for i in range(n_seeds))
+    mode_name_seed_arr += [(int(utils.Mode.EDDP), "EDDP", 0)]
+    mode_name_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), "GCE_INF_EDDP", 0)] # only for lam=0.8
+    mode_name_seed_arr += list((int(utils.Mode.P_SDDP), "P_SDDP", i)  for i in range(n_seeds))
     prob_name_arr = ['hydro']
 
     log_folder_base = os.path.join("logs", DATE, "exp_%s" % EXP_ID)
@@ -58,14 +61,14 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         os.makedirs(setting_folder_base)
 
     # https://stackoverflow.com/questions/9535954/printing-lists-as-tabular-data
-    exp_metadata = ["Exp id", "prob_name", "lam", "mode", "alg_seed"]
-    row_format ="{:>10}|" * (len(exp_metadata)-1) + "{:>10}"
+    exp_metadata = ["Exp id", "prob_name", "lam", "alg", "alg_seed"]
+    row_format ="{:>10}|" * (len(exp_metadata)-2) + "{:>15}|{:>10}"
     print("")
     print(row_format.format(*exp_metadata))
-    print("-" * ((len(exp_metadata)-1)*10 + 10 + len(exp_metadata)))
+    print("-" * ((len(exp_metadata)-1)*10 + 15 + len(exp_metadata)))
 
     ct = 0
-    for (prob_name, (lam, n_iter, T), (mode, alg_seed)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_seed_arr):
+    for (prob_name, (lam, n_iter, T), (mode, alg_name, alg_seed)) in itertools.product(prob_name_arr, lam_n_iter_arr, mode_name_seed_arr):
         od["prob_name"] = prob_name
         od["lam"] = lam
         od["max_iter"] = n_iter
@@ -80,7 +83,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         setting_fname = os.path.join(setting_folder_base,  "run_%s.yaml" % ct)
         od["log_folder"] = os.path.join(log_folder_base, "run_%s" % ct)
 
-        print(row_format.format(ct, od["prob_name"], od["lam"], od["mode"], od["alg_seed"]))
+        print(row_format.format(ct, od["prob_name"], od["lam"], alg_name, od["alg_seed"]))
 
         if not(os.path.exists(od["log_folder"])):
             os.makedirs(od["log_folder"])
