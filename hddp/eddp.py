@@ -105,6 +105,14 @@ def get_eddp_problem(settings, T):
                 settings['prob_seed'],
                 has_ctg=t<settings['T']-1,
             )
+        elif settings['prob_name'] == 'large_inventory':
+            prob_solver_arr[t], x_0 = opt_setup.create_large_inventory_gurobi_model(
+                settings['N'], 
+                settings['lam'], 
+                settings['prob_seed'],
+                has_ctg=t<settings['T']-1,
+                prob_scale=settings['prob_scale'],
+            )
         elif settings['prob_name'] == 'riskadverse_inventory':
             prob_solver_arr[t], x_0 = opt_setup.create_riskadverse_inventory_gurobi_model(
                 settings['N'], 
