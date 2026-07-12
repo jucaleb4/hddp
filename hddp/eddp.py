@@ -178,6 +178,7 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
     reached_opt_sat = False
 
     n_iters_ran = settings['max_iter']
+    print("Total iterations: %d" % (settings['max_iter']))
     for k in range(1, settings['max_iter']+1):
         # forward phase: solve subproblems
         s_time = time.time()
@@ -297,6 +298,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
     lb_arr[0] = lb
     ub_arr[0] = ub
 
+    print("Total iterations: %d" % (max_iter//T))
     for n_iters in range(max_iter//T2):
         lb_arr[n_iters*T2:(n_iters+1)*T2] = lb_arr[n_iters*T2]
         ub_arr[n_iters*T2:(n_iters+1)*T2] = ub_arr[n_iters*T2]
