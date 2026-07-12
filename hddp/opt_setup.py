@@ -76,6 +76,77 @@ def create_inventory_gurobi_model(N, lam, seed, has_ctg=True):
 
     return inventory_solver, x_0
 
+def create_large_inventory_gurobi_model(N, lam, seed, has_ctg=True, prob_scale=1):
+    """ Setups basic inventory problem
+
+    State (dim=n) x_t: inventory at start of ordering at time t, before demand realized
+    Ctrl (dim=5*n) y_t,u_t,x_t^+,x_t^-: dummy of past, order amount, max(0,x_t), max(0,-x_t)
+
+    min  c*u_t + h*(y_t^+) + b*(y_t^-) 
+    s.t. y_t = x_{t-1} - D_t 
+         x_t = y_{t} + u_t
+         y_t^+ >= max(0, y_t)
+         y_t^- >= max(0, -y_t)
+         u_t >= 0
+    """
+    n = prob_scale
+
+    rng = np.random.default_rng(seed)
+    h = rng.uniform(low=0.05, high=0.5, size=n)
+    b = rng.uniform(low=2.1, high=3.5, size=n)
+    c = np.cos(np.pi/3) + rng.uniform(1.25, 1.75, size=n)
+    phi = rng.uniform(low=1.1, high=2.1, size=n)
+    d = 1 + rng.geometric(1./9, size=n) # mean: 10.0
+
+    # define gurobi model
+    model = gp.Model()
+    now = model.addMVar(n, lb=-100, ub=100, name="now") # quantity post-order
+    x_lb_arr = np.array([-100]*n)
+    x_ub_arr = np.array([100]*n)
+    now_var_name_arr = ["now[{}]".format(i) for i in range(n)]
+    past_state_for_max_val = np.array([-100]*n)
+
+    past = model.addMVar(n, lb=-100)
+    y = model.addMVar(n, lb=-float('inf'), name="y") # quantity post-demand
+    y_pos = model.addMVar(n, lb=0, name="y_pos") # over-supply
+    y_neg = model.addMVar(n, lb=0, name="y_neg") # under-supply
+    u = model.addMVar(n, lb=0, name="u") # order amount
+
+    # model.addConstr(-now + (past + u) == 0, name='rand') # .values()
+    model.addConstr(-y + past == np.zeros(n), name='rand') # .values()
+    model.addConstr(now - (y + u) == np.zeros(n)) 
+
+    model.addConstr(y_pos - y >= np.zeros(n), name='y_pos') # .values()
+    model.addConstr(y_neg + y >= np.zeros(n), name='y_neg') # .values()
+    dummy_constrs = model.addConstr(np.eye(n)@past == np.zeros(n), name="dummy") # .values()
+
+    model.setObjective(c@u + b@y_neg + h@y_pos, gp.GRB.MINIMIZE)
+    model.update()
+    M_h = la.norm(c) + la.norm(b) + la.norm(h)
+
+    # shape: (n,1)
+    scenario_0 = 5.5*np.ones(shape=(n,1)) # rng.poisson(lam=5.5, size=(n,1))
+    scenarios = np.diag(phi)@np.maximum(1, rng.normal(loc=d, scale=phi, size=(N,n))).T
+    # shape: (1+scenarios,n)
+    scenarios = np.hstack((scenario_0, scenarios)).T
+
+    inventory_solver = solver.GurobiSolver(
+        model, 
+        now, 
+        now_var_name_arr,
+        lam, 
+        scenarios,
+        M_h,
+        x_lb_arr,
+        x_ub_arr,
+        h_min_val=0,
+        past_state_for_max_val=past_state_for_max_val if has_ctg else None,
+    )
+
+    x_0 = np.array([0]*n)
+
+    return inventory_solver, x_0
+
 def create_riskadverse_inventory_gurobi_model(N, lam, seed, has_ctg=True):
     """ Setups basic inventory problem
 
@@ -239,6 +310,7 @@ def create_hydro_thermal_gurobi_model(N, lam, seed, has_ctg=True):
                         for i in range(n_regions)])
     # TEMP
     scenario_0 = np.array([hydro_['INITIAL'][n_regions:2*n_regions].to_numpy()]).T 
+    # shape: (1+scenarios,n)
     scenarios = np.hstack((scenario_0, scenarios)).T
 
     demand = demand.to_numpy()

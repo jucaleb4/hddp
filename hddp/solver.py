@@ -256,7 +256,8 @@ class GurobiSolver(GenericSolver):
 
         # check feasible
         if self.model.status != gp.GRB.OPTIMAL:
-            raise Exception("LP did not terminate as optimal")
+            raise Exception("LP did not terminate as optimal. Got code %d" % self.model.status)
+        
 
         # Get solution
         x_sol = self.x.X

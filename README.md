@@ -48,6 +48,7 @@ Different script files and the type of settings they run are given here:
 - ~~`2025_04_03/exp_0.py`: tuning of hydropower generation planning~~ (not yet implemented)
 - ~~`2025_04_03/exp_1.py`: evaluation of hydropower generation planning~~ (not yet implemented)
 - `2025_04_23/exp_0.py`: risk-adverse inventory 
+- `2026_07_12/exp_0.py`: larger-inventory
 
 The reason we re-ran SDDP/EDDP in the experiments `2025_01_22/exp_0.py` (and not for the infinite-horizon counterparts) is because the non-inf methods require more oracle solves to achieve comparable performance to the infinite-horizon methods.
 

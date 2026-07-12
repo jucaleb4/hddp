@@ -69,6 +69,8 @@ def get_problem(settings):
         return opt_setup.create_portfolio_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
     elif settings['prob_name'] == 'inventory':
         return opt_setup.create_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
+    elif settings['prob_name'] == 'large_inventory':
+        return opt_setup.create_large_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'], prob_scale=settings['prob_scale'])
     elif settings['prob_name'] == 'riskadverse_inventory':
         return opt_setup.create_riskadverse_inventory_gurobi_model(settings['N'], settings['lam'], settings['prob_seed'])
     elif settings['prob_name'] == 'hierarchical_inventory':
