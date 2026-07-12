@@ -204,7 +204,8 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
                                                       agg_ctg[0], ub_model, 
                                                       settings['lam'], k, 
                                                       time.time() - s0_time, 
-                                                      k % 100 == 0)
+                                                      k % 100 == 0,
+                                                      settings['max_iter'])
             eval_time_arr[k] = eval_time_arr[k-1] + time.time() - s_time
 
             s_time = time.time()
@@ -266,7 +267,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
     grad_from_fwd = np.zeros((T, settings['n']), dtype=float)
     val_from_fwd = np.zeros(T, dtype=float)
     # elapsed time since genesis
-    max_iter = T2 * (1+settings['max_iter']//T2)
+    max_iter = int(T2*settings['max_iter'])
     print("Running for %d (requested %d)" % (max_iter, settings["max_iter"]))
     total_time_arr = np.zeros(max_iter+1)
     fwd_time_arr = np.zeros(max_iter+1)
@@ -282,7 +283,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
     temp = solve_scenarios(prob_solver_arr[0], x_0, x_0, 0, 1)
     [agg_x, agg_val, agg_grad, agg_ctg] = temp
     lb, ub = evaluate_bounds(agg_x[0], agg_val[0], agg_ctg[0], ub_model, 
-                             settings['lam'], 0, 0, 0)
+                             settings['lam'], 0, 0, 0, max_iter=-1)
     lb_arr[0] = lb
     ub_arr[0] = ub
 
@@ -340,7 +341,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
         [agg_x, agg_val, agg_grad, agg_ctg] = temp
         lb, ub = evaluate_bounds(agg_x[0], agg_val[0], agg_ctg[0], ub_model, 
                                  settings['lam'], n_iters*T2+T+t_0-1, 
-                                 time.time() - s0_time, t==1)
+                                 time.time() - s0_time, t==1, max_iter/T**0.25)
         lb_arr[(n_iters+1)*T2] = lb
         ub_arr[(n_iters+1)*T2] = ub
         eval_time_arr[(n_iters+1)*T2] = eval_time_arr[(n_iters+1)*T2-1] + time.time() - s_time
@@ -354,13 +355,19 @@ def _EDDP(settings, n_procs, q_host, q_child):
     # to simulate rolling horizon basis, only save first-stage cutting plane (since time homogenous)
     prob_solver_arr[0].save_cuts_to_file(settings['log_folder'])
 
-def evaluate_bounds(x_0_sol, val_0, ctg_0, ub_model, lam, k, elpsd_time, print_progress=True):
+def evaluate_bounds(x_0_sol, val_0, ctg_0, ub_model, lam, k, elpsd_time, print_progress=True, max_iter=-1):
     lb = val_0
     ub_eval = ub_model.evaluate_ub(x_0_sol)
     ub = val_0 - lam*(ctg_0 - ub_eval)
+    time_left_msg = ""
+    if max_iter > 0:
+        avg_time_per_iter = 2*elpsd_time / k**2
+        predicted_last_avg_time_per_iter = max_iter *avg_time_per_iter
+        time_left = max_iter*predicted_last_avg_time_per_iter**2
+        time_left_msg = "(est tot time: %.1fs)" % time_left
 
     if print_progress:
-        print("k=%d | %.1es | %.2e | %.2e" % (k, elpsd_time, lb, ub))
+        print("k=%d | %.1es | %.2e | %.2e %s" % (k, elpsd_time, lb, ub, time_left_msg))
 
     return lb, ub
 
