@@ -34,7 +34,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('lam', 0.99),
         ('eps', 1e-3),
         ('max_iter', max_iter),
-        ('time_limit', 3600),
+        ('time_limit', 7200),
         ('prob_seed', seed_0),
         ('alg_seed', seed_0),
         ('mode', int(utils.Mode.INF_EDDP)),
