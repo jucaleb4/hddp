@@ -48,7 +48,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         (int(utils.Mode.GAP_INF_EDDP), "GAP_INF_EDDP", 0)] 
     mode_name_seed_arr += list((int(utils.Mode.INF_SDDP), "CE_INF_SDDP", i)  for i in range(n_seeds))
     mode_name_seed_arr += [(int(utils.Mode.EDDP), "EDDP", 0)]
-    mode_name_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), "GCE_INF_EDDP", 0)] # only for lam=0.8
+    # mode_name_seed_arr += [(int(utils.Mode.GCE_INF_EDDP), "GCE_INF_EDDP", 0)] # only for lam=0.8
     mode_name_seed_arr += list((int(utils.Mode.P_SDDP), "P_SDDP", i)  for i in range(n_seeds))
     prob_name_arr = ['hydro']
 
