@@ -39,7 +39,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('alg_seed', seed_0),
         ('mode', int(utils.Mode.INF_EDDP)),
         ('prob_name', 'hydro'),
-        ('prob_scale', 100), 
+        ('prob_scale', 32), 
     ])
 
     prob_name_arr = ['large_inventory']
