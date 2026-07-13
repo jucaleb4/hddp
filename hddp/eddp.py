@@ -211,7 +211,8 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
                 gap_ub_solve_update_time_arr[k] = gap_ub_solve_update_time_arr[k-1] + temp[2]
             temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings)
             [x_next, z_next, scenario_arr[k-1], avg_val, avg_grad] = temp
-            S.update(x_curr, min(S.get(x_curr), S.get(z_next) - 1))
+            if settings["mode"] in [utils.Mode.INF_EDDP, utils.Mode.CE_INF_EDDP, utils.Mode.GAP_INF_EDDP]:
+                S.update(x_curr, min(S.get(x_curr), S.get(z_next) - 1))
             select_time_arr[k] = select_time_arr[k-1] + time.time() - s_time
 
             # evaluate
@@ -341,7 +342,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
             s_time = time.time()
             x_t_prev = x_from_fwd[t-1]
             x_t = x_from_fwd[t]
-            if S.get(x_t) <= t:
+            if (settings["mode"] in [utils.Mode.EDDP]) and S.get(x_t) <= t:
                 S.update(x_t_prev, min(S.get(x_t_prev), S.get(x_t) - 1))
             select_time_arr[n_iters] += time.time() - s_time
 
