@@ -968,7 +968,7 @@ class UpperBoundModel:
 
         self.num_iters += 1
 
-    def evaluate_ub(self, x):
+    def evaluate_ub(self, x, return_solve_time=False):
         """ Evaluates upper bound model at search point `x`
 
         Args:
@@ -977,10 +977,12 @@ class UpperBoundModel:
         Returns:
             float: upper bound
         """
-        if not self.has_gp_mdl:
-            return self.V_0
+        solve_time = 0.
 
-        if self.num_iters == 0:
+        if (not self.has_gp_mdl) or self.num_iters == 0:
+            if return_solve_time:
+                return self.V_0, solve_time
+
             return self.V_0
 
         ub_model_sum = 0
@@ -1002,10 +1004,15 @@ class UpperBoundModel:
                 )
 
             self.model_2.update()
+            s_time = time.time()
             self.model_2.optimize()
+            solve_time += time.time() - s_time
 
             ub_model_sum += self.model_2.objVal
             # if ver == 0:
             #     print(len(self.hat_vs[ver::self.N]), self.hat_vs[ver::self.N][-5:])
+
+        if return_solve_time:
+            return (ub_model_sum / self.N), solve_time
 
         return ub_model_sum / self.N

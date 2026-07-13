@@ -175,6 +175,12 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
     lb_arr = np.zeros(settings['max_iter'], dtype=float)
     ub_arr = np.zeros(settings['max_iter'], dtype=float)
     scenario_arr = np.zeros(settings['max_iter'], dtype=float)
+    # gap_lb_update_time (and ub) include model update + solve time
+    # gap_ub_solve_update_time_arr only includes solve time
+    # gap_ub_update_time only includes solve time to better elucidate the cost 
+    gap_lb_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
+    gap_ub_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
+    gap_ub_solve_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
     reached_opt_sat = False
 
     n_iters_ran = settings['max_iter']
@@ -199,7 +205,10 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
             comm_time_arr[k] = comm_time_arr[k-1] + time.time() - s_time
             s_time = time.time()
             if settings['mode'] == utils.Mode.GAP_INF_EDDP:
-                update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, settings["eps_lvls"])
+                temp = update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, settings["eps_lvls"])
+                gap_lb_update_time_arr[k] = gap_lb_update_time_arr[k-1] + temp[0]
+                gap_ub_update_time_arr[k] = gap_ub_update_time_arr[k-1] + temp[1]
+                gap_ub_solve_update_time_arr[k] = gap_ub_solve_update_time_arr[k-1] + temp[2]
             temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings)
             [x_next, z_next, scenario_arr[k-1], avg_val, avg_grad] = temp
             S.update(x_curr, min(S.get(x_curr), S.get(z_next) - 1))
@@ -241,7 +250,12 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
             break
 
     if is_host:
-        utils.save_logs(settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr, scenario_arr) 
+        utils.save_logs(
+            settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr,
+            select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr,
+            scenario_arr, gap_lb_update_time_arr, gap_ub_update_time_arr,
+            gap_ub_solve_update_time_arr,
+        ) 
         prob_solver.save_cuts_to_file(settings['log_folder'])
 
 def _EDDP(settings, n_procs, q_host, q_child):
@@ -288,6 +302,9 @@ def _EDDP(settings, n_procs, q_host, q_child):
     lb_arr = np.zeros(max_iter, dtype=float)
     ub_arr = np.zeros(max_iter, dtype=float)
     scenario_arr = np.zeros(max_iter, dtype=float)
+    gap_lb_update_time_arr = np.zeros(max_iter, dtype=float)
+    gap_ub_update_time_arr = np.zeros(max_iter, dtype=float)
+    gap_ub_solve_update_time_arr = np.zeros(max_iter, dtype=float)
     n_iters_ran = max_iter
 
     # first evaluate just to fill the bounds
@@ -359,7 +376,12 @@ def _EDDP(settings, n_procs, q_host, q_child):
             n_iters_ran = n_iters
             break
 
-    utils.save_logs(settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr, scenario_arr) 
+    utils.save_logs(
+        settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr,
+        select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr,
+        scenario_arr, gap_lb_update_time_arr, gap_ub_update_time_arr,
+        gap_ub_solve_update_time_arr
+    ) 
     # to simulate rolling horizon basis, only save first-stage cutting plane (since time homogenous)
     prob_solver_arr[0].save_cuts_to_file(settings['log_folder'])
 
@@ -383,9 +405,17 @@ def update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, eps_lvls):
     """
     Update saturation data structure with upper and lower bounds
     """
+    lb_update_time = 0
+    ub_update_time = 0
+    ub_solve_update_time = 0
     for x_i in agg_x:
+        s_time = time.time()
         x_lb = lb_model.evaluate_lb(x_i)
-        x_ub = ub_model.evaluate_ub(x_i)
+        lb_update_time += time.time() - s_time
+        s_time = time.time()
+        x_ub, ub_solve_time = ub_model.evaluate_ub(x_i, return_solve_time=True)
+        ub_update_time += time.time() - s_time
+        ub_solve_update_time += ub_solve_time
         gap = x_ub - x_lb
 
         if gap < 0:
@@ -402,6 +432,8 @@ def update_S_with_ub_and_lb(S, agg_x, lb_model, ub_model, eps_lvls):
         lvl_based_on_saturation = S.get(x_i)
         if lvl_based_on_gap < lvl_based_on_saturation:
             S.update(x_i, lvl_based_on_gap)
+
+    return lb_update_time, ub_update_time, ub_solve_update_time
 
 def host_forward_get(n_procs, q_host, agg_x, agg_val, agg_grad):
     """ Gathers all subproblem solutions from the forward phase """

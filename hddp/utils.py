@@ -3,16 +3,22 @@ import numpy as np
 from enum import IntEnum
 
 def save_logs(folder, k, total_time_arr, fwd_time_arr, select_time_arr, 
-              eval_time_arr, comm_time_arr, lb_arr, ub_arr, scen_arr):
+              eval_time_arr, comm_time_arr, lb_arr, ub_arr, scen_arr,
+              gap_lb_update_time_arr, gap_ub_update_time_arr,
+              gap_ub_solve_update_time_arr,
+    ):
 
-    all_times_arr = np.zeros((k, 5), dtype=float)
+    all_times_arr = np.zeros((k, 8), dtype=float)
     all_times_arr[:,0] = total_time_arr[:k]
     all_times_arr[:,1] = fwd_time_arr[:k]
     all_times_arr[:,2] = select_time_arr[:k]
     all_times_arr[:,3] = eval_time_arr[:k]
     all_times_arr[:,4] = comm_time_arr[:k]
+    all_times_arr[:,5] = gap_lb_update_time_arr[:k]
+    all_times_arr[:,6] = gap_ub_update_time_arr[:k]
+    all_times_arr[:,7] = gap_ub_solve_update_time_arr[:k]
     fname = os.path.join(folder, "elpsed_times.csv")
-    np.savetxt(fname, all_times_arr, delimiter=',', header='total_time,fwd_time,select_time,eval_time,comm_time')
+    np.savetxt(fname, all_times_arr, delimiter=',', header='total_time,fwd_time,select_time,eval_time,comm_time,gap_lb_update,gap_ub_update,gap_ub_solve_update')
 
     all_bounds_arr = np.hstack((np.atleast_2d(lb_arr[:k]).T, np.atleast_2d(ub_arr[:k]).T))
     fname = os.path.join(folder, "bounds.csv")
