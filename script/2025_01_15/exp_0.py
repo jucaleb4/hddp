@@ -9,7 +9,7 @@ sys.path.insert(0, parent_dir)
 
 from hddp import utils
 
-MAX_RUNS = 49
+MAX_RUNS = 48
 DATE = "2025_01_15"
 EXP_ID  = 0
 
