@@ -41,7 +41,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
         ('prob_name', 'hydro'),
     ])
 
-    lam_n_iter_arr = [(0.9906, max_iter, 128), (0.8, max_iter//2, 24)]
+    lam_n_iter_arr = [(0.9906, max_iter, 128), (0.8, max_iter, 24)]
     mode_name_seed_arr = [
         (int(utils.Mode.INF_EDDP), "INF_EDDP", 0), 
         (int(utils.Mode.CE_INF_EDDP), "CE_INF_EDDP", 0), 
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     seed_0 = 0
     n_seeds = 10
-    max_iters = 10 if args.work else 2_000
+    max_iters = 10 if args.work else 3_000
 
     if args.setup:
         setup_setting_files(seed_0, n_seeds, max_iters)

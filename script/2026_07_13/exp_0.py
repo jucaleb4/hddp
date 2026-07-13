@@ -43,7 +43,7 @@ def setup_setting_files(seed_0, n_seeds, max_iter):
     ])
 
     prob_name_arr = ['large_inventory']
-    lam_n_iter_arr = [(0.8, 1_000, 24)]
+    lam_n_iter_arr = [(0.8, 3_000, 24)]
     mode_seed_maxitermult_arr = [
         (int(utils.Mode.INF_EDDP), 0, 1), 
         (int(utils.Mode.CE_INF_EDDP), 0, 1), 

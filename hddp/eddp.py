@@ -167,25 +167,25 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
 
     s0_time = time.time()
     # elapsed time since genesis
-    total_time_arr = np.zeros(settings['max_iter']+1)
-    fwd_time_arr = np.zeros(settings['max_iter']+1)
-    select_time_arr = np.zeros(settings['max_iter']+1)
-    eval_time_arr = np.zeros(settings['max_iter']+1)
-    comm_time_arr = np.zeros(settings['max_iter']+1)
+    total_time_arr = np.zeros(settings['max_iter'])
+    fwd_time_arr = np.zeros(settings['max_iter'])
+    select_time_arr = np.zeros(settings['max_iter'])
+    eval_time_arr = np.zeros(settings['max_iter'])
+    comm_time_arr = np.zeros(settings['max_iter'])
     lb_arr = np.zeros(settings['max_iter'], dtype=float)
     ub_arr = np.zeros(settings['max_iter'], dtype=float)
     scenario_arr = np.zeros(settings['max_iter'], dtype=float)
     # gap_lb_update_time (and ub) include model update + solve time
     # gap_ub_solve_update_time_arr only includes solve time
     # gap_ub_update_time only includes solve time to better elucidate the cost 
-    gap_lb_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
-    gap_ub_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
-    gap_ub_solve_update_time_arr = np.zeros(settings['max_iter']+1, dtype=float)
+    gap_lb_update_time_arr = np.zeros(settings['max_iter'], dtype=float)
+    gap_ub_update_time_arr = np.zeros(settings['max_iter'], dtype=float)
+    gap_ub_solve_update_time_arr = np.zeros(settings['max_iter'], dtype=float)
     reached_opt_sat = False
 
     n_iters_ran = settings['max_iter']
     print("Total iterations: %d" % (settings['max_iter']))
-    for k in range(1, settings['max_iter']+1):
+    for k in range(settings['max_iter']):
         # forward phase: solve subproblems
         s_time = time.time()
         temp = solve_scenarios(prob_solver, x_0, x_curr, start_scenario_idx, end_scenario_idx)
@@ -209,8 +209,8 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
                 gap_lb_update_time_arr[k] = gap_lb_update_time_arr[k-1] + temp[0]
                 gap_ub_update_time_arr[k] = gap_ub_update_time_arr[k-1] + temp[1]
                 gap_ub_solve_update_time_arr[k] = gap_ub_solve_update_time_arr[k-1] + temp[2]
-            temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings)
-            [x_next, z_next, scenario_arr[k-1], avg_val, avg_grad] = temp
+            temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k+1, x_0, settings)
+            [x_next, z_next, scenario_arr[k], avg_val, avg_grad] = temp
             if settings["mode"] in [utils.Mode.INF_EDDP, utils.Mode.CE_INF_EDDP, utils.Mode.GAP_INF_EDDP]:
                 S.update(x_curr, min(S.get(x_curr), S.get(z_next) - 1))
             select_time_arr[k] = select_time_arr[k-1] + time.time() - s_time
@@ -221,11 +221,11 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
             s_time = time.time()
             lb_model.add_cut(avg_val, avg_grad, x_curr)
             ub_model.add_search_point_to_ub_model(x_curr)
-            lb_arr[k-1], ub_arr[k-1] = evaluate_bounds(x_0_sol, agg_val[0], 
+            lb_arr[k], ub_arr[k] = evaluate_bounds(x_0_sol, agg_val[0], 
                                                       agg_ctg[0], ub_model, 
-                                                      settings['lam'], k, 
+                                                      settings['lam'], k+1, 
                                                       time.time() - s0_time, 
-                                                      k % 100 == 0,
+                                                      (k+1) % 100 == 0,
                                                       settings['max_iter'])
             eval_time_arr[k] = eval_time_arr[k-1] + time.time() - s_time
 
@@ -247,7 +247,7 @@ def _HDDP_multiproc(settings, n_procs, q_host, q_child, is_host):
 
         total_time_arr[k] = time.time() - s0_time
         if total_time_arr[k] >= settings['time_limit']:
-            n_iters_ran = k
+            n_iters_ran = k+1
             break
 
     if is_host:

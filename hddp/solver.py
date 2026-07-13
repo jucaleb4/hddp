@@ -801,16 +801,16 @@ class UpperBoundModel:
             print("Not given gurobi model, upper bound model neglected")
             return
 
-        model.update() # update before copying
-        self.model_1 = model.copy()
-        self.model_1.setParam('OutputFlag', 0)
-
-        now_vars_list = [self.model_1.getVarByName(vname) for vname in now_var_name_arr]
-        self.now_vars = gp.MVar(now_vars_list)
-        self.n = len(now_var_name_arr)
         self.scenarios = scenarios
         self.N = len(self.scenarios)
         self.M = M
+        self.n = len(now_var_name_arr)
+
+        model.update() # update before copying
+        self.model_1 = model.copy()
+        self.model_1.setParam('OutputFlag', 0)
+        now_vars_list = [self.model_1.getVarByName(vname) for vname in now_var_name_arr]
+        self.now_vars = gp.MVar(now_vars_list)
 
         # self.hat_vs contains all hat_v's across iterations and 
         # scenarios. We store it naively in a 1D array, where hat v's
@@ -819,46 +819,53 @@ class UpperBoundModel:
         # TODO: Better data structure
         self.hat_vs = np.array([])
 
-        # e's and f's 
-        self.es = [] # vector residual (+)
-        self.fs = [] # vector residual (-)
-        self.rs = [] # scalar residual
-        # add new variables and include objective coeffs 
-        for l in range(self.N+1):
-            self.es.append(self.model_1.addMVar(
-                # self.n, obj=self.lam*self.M/self.N, lb=0, name="e_{}".format(l)
-                self.n, obj=0, lb=0, name="e_{}".format(l)
-            ))
-            self.fs.append(self.model_1.addMVar(
-                # self.n, obj=self.lam*self.M/self.N, lb=0, name="f_{}".format(l)
-                self.n, obj=0, lb=0, name="f_{}".format(l)
-            ))
-            self.rs.append(self.model_1.addVar(obj=self.lam*self.M/self.N, lb=0, name="r_{}".format(l)))
-
-        # affine span constraint
         self.affine_span_constrs = []
         self.sum_pi_constrs = []
+        # add new variables and include objective coeffs 
         for l in range(self.N):
+            # vector residual (+)
+            e_var = self.model_1.addMVar(
+                # self.n, obj=self.lam*self.M/self.N, lb=0, name="e_{}".format(l)
+                self.n, obj=0, lb=0, name="e"
+            )
+            # vector residual (-)
+            f_var = self.model_1.addMVar(
+                # self.n, obj=self.lam*self.M/self.N, lb=0, name="f_{}".format(l)
+                self.n, obj=0, lb=0, name="f"
+            )
+            # scalar residual 
+            r_var = self.model_1.addVar(obj=self.lam*self.M/self.N, lb=0, name="r")
+
             # -bar{x} + (e-f) + Xpi = 0
             new_affine_constr = self.model_1.addConstr(
-                -self.now_vars + (self.es[l] - self.fs[l]) == np.zeros(self.n)
+                -self.now_vars + (e_var - f_var) == np.zeros(self.n)
             )
             # -(e+f) + 1*r = 0
             self.affine_span_constrs.append(new_affine_constr)
-            self.model_1.addConstr(-self.es[l] - self.fs[l] + self.rs[l] == 0)
+            self.model_1.addConstr(-e_var - f_var + r_var == 0)
+
+        # TODO: Delete
+        # for ver in range(self.N):
+        #     self.model_1_arr[ver].update()
+        self.model_1.update()
 
         # second model
-        self.model_2 = gp.Model("upper_bound2")
-        self.model_2.setParam('OutputFlag', 0)
-        self.mu = self.model_2.addMVar(1, name="mu", lb=-float("inf"))
-        self.rho = self.model_2.addMVar(self.n, name="rho", lb=-float("inf"))
-        self.abs_rho = self.model_2.addMVar(self.n, name="abs_rho")
-        self.model_2.addConstr(self.abs_rho >= self.rho)
-        self.model_2.addConstr(self.abs_rho >= -self.rho)
-        self.model_2.addConstr(gp.quicksum(self.abs_rho) <= M)
-        self.model_2_cut_constr_arr = []
+        self.model_2_arr = []
+        self.mu_arr = []
+        self.rho_arr = []
+        self.abs_rho_arr = []
         self.num_iters = 0
-        # new objective each time (relies on input `x`), so we set it on the fly
+        for ver in range(self.N):
+            self.model_2_arr.append(gp.Model("upper_bound2_v%d" % ver))
+            self.model_2_arr[ver].setParam('OutputFlag', 0)
+            self.mu_arr.append(self.model_2_arr[ver].addMVar(1, name="mu", lb=-float("inf")))
+            self.rho_arr.append(self.model_2_arr[ver].addMVar(self.n, name="rho", lb=-float("inf")))
+            self.abs_rho_arr.append(self.model_2_arr[ver].addMVar(self.n, name="abs_rho"))
+            self.model_2_arr[ver].addConstr(self.abs_rho_arr[ver] >= self.rho_arr[ver])
+            self.model_2_arr[ver].addConstr(self.abs_rho_arr[ver] >= -self.rho_arr[ver])
+            self.model_2_arr[ver].addConstr(gp.quicksum(self.abs_rho_arr[ver]) <= M)
+            # new objective each time (relies on input `x`), so we set it on the fly
+            self.model_2_arr[ver].update()
 
     def _solve_model_1_and_update_hat_vs(self, x, k):
         """ 
@@ -871,8 +878,8 @@ class UpperBoundModel:
         if not self.has_gp_mdl:
             return 
 
-        new_hat_vs = np.array([])
         for ver in range(self.N):
+            # dummy
             for i in range(self.n):
                 # set x^{k-1}
                 self.model_1.setAttr(
@@ -880,7 +887,6 @@ class UpperBoundModel:
                     self.model_1.getConstrByName("dummy[{}]".format(i)), 
                     x[i]
                 )
-
             # RHS
             for i in range(len(self.scenarios[ver])):
                 self.model_1.setAttr(
@@ -888,21 +894,19 @@ class UpperBoundModel:
                     self.model_1.getConstrByName("rand[{}]".format(i)),
                     self.scenarios[ver][i]
                 )
-
+            self.model_1.update()
             self.model_1.optimize()
+            if self.model_1.status != gp.GRB.OPTIMAL:
+                if self.model_1.status == gp.GRB.SUBOPTIMAL:
+                    print("Sub-optimal solution, proceeding anyways...")
+                else:
+                    raise Exception("LP did not terminate as optimal. Got code %d" % self.model_1.status)
+
             if self.num_iters == 0: # replace penalty (M) with V_0 cost to go
                 x_sol = self.now_vars.X
-                new_hat_vs = np.append(new_hat_vs, 
-                    # self.model_1.objVal 
-                    # + self.lam * self.V_0 
-                    # - self.lam * self.M * np.sum(np.abs(x_sol)))
-                    self.V_0
-                )
+                self.hat_vs = np.append(self.hat_vs, self.V_0)
             else:
-                new_hat_vs = np.append(new_hat_vs, self.model_1.objVal)
-
-        # form one big array
-        self.hat_vs = np.append(self.hat_vs, new_hat_vs)
+                self.hat_vs = np.append(self.hat_vs, self.model_1.objVal)
 
     def add_search_point_to_ub_model(self, x):
         """ 
@@ -917,13 +921,13 @@ class UpperBoundModel:
 
         # Compute \hat{v} (aka, solve Model 1)
         self._solve_model_1_and_update_hat_vs(x, self.num_iters)
+        assert len(self.hat_vs) == self.N * (self.num_iters+1), "Mis-match len(hat_vs)=%d with N*(n_iters+1)=%d" % (len(self.hat_vs), self.N*(self.num_iters+1))
 
         # Update model 1: add new pi_i^{k-1} for each scenario {i}
         # Recall self.hat_vs stored hat_v's across iterations and scenarios.
         # Values in same iteration are grouped together in consecutive N elements,
         # hence, we offset by `N * num_iters` to dtermine which group of N
         # elemennts to use. 
-        self.model_1.update()
         for l in range(self.N): # (l == ver)
             # TODO Can we make this one call rather than if/else? Reason we need if/else
             # is because initializing constraint with sum pi = 1 (when pi doesn't exist
@@ -958,17 +962,18 @@ class UpperBoundModel:
                     column=col_l,
                 )
 
-        # TODO: How can we update this without looping?
-        # self.model.setAttr("RHS", self.model.getConstrByName("dummy"), x_prev)
+            # TODO: How can we update this without looping?
+            # self.model.setAttr("RHS", self.model.getConstrByName("dummy"), x_prev)
 
-        # Update Model 2: Add a new constraint. RHS of 0 is placeholder value
-        self.model_2.addConstr(
-            self.mu + x @ self.rho <= 0, 
-            name="model_2_cut_constr[{}]".format(self.num_iters)
-        )
+            # Update Model 2: Add a new constraint. RHS of 0 is placeholder value
+            self.model_2_arr[l].addConstr(
+                self.mu_arr[l] + x @ self.rho_arr[l] <= self.hat_vs[self.N * self.num_iters + l],
+                name="model_2_cut_constr[{}]".format(self.num_iters)
+            )
 
-        self.model_2.update()
+            self.model_2_arr[l].update()
 
+        self.model_1.update()
         self.num_iters += 1
 
     def evaluate_ub(self, x, return_solve_time=False):
@@ -990,30 +995,21 @@ class UpperBoundModel:
 
         ub_model_sum = 0
 
-        self.model_2.setObjective(self.mu + self.rho @ x, gp.GRB.MAXIMIZE)
-        self.model_2.update()
         # Update hat v's to appropriate scenario
         for ver in range(self.N):
-            for k in range(self.num_iters):
-                constr_ptr = self.model_2.getConstrByName(
-                    # "model_2_cut_constr[{}]".format(k)
-                    "model_2_cut_constr[{}][0]".format(k)
-                )
-                assert constr_ptr is not None, "Cannot find constraint %s in ub's model_2" % "model_2_cut_constr[{}]".format(k)
-                self.model_2.setAttr(
-                    "RHS", 
-                    constr_ptr,
-                    self.hat_vs[(ver) + k*self.N],
-                )
+            self.model_2_arr[ver].setObjective(self.mu_arr[ver] + self.rho_arr[ver] @ x, gp.GRB.MAXIMIZE)
+            self.model_2_arr[ver].update()
 
-            self.model_2.update()
             s_time = time.time()
-            self.model_2.optimize()
+            self.model_2_arr[ver].optimize()
+            if self.model_2_arr[ver].status != gp.GRB.OPTIMAL:
+                if self.model_2_arr[ver].status == gp.GRB.SUBOPTIMAL:
+                    print("Sub-optimal solution, proceeding anyways...")
+                else:
+                    raise Exception("LP did not terminate as optimal. Got code %d" % self.model_2_arr[ver].status)
             solve_time += time.time() - s_time
 
-            ub_model_sum += self.model_2.objVal
-            # if ver == 0:
-            #     print(len(self.hat_vs[ver::self.N]), self.hat_vs[ver::self.N][-5:])
+            ub_model_sum += self.model_2_arr[ver].objVal
 
         if return_solve_time:
             return (ub_model_sum / self.N), solve_time
