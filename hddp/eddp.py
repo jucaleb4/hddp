@@ -278,16 +278,16 @@ def _EDDP(settings, n_procs, q_host, q_child):
     grad_from_fwd = np.zeros((T, settings['n']), dtype=float)
     val_from_fwd = np.zeros(T, dtype=float)
     # elapsed time since genesis
-    max_iter = int(T2*settings['max_iter'])
+    max_iter = int(settings['max_iter'])
     print("Running for %d (requested %d)" % (max_iter, settings["max_iter"]))
-    total_time_arr = np.zeros(max_iter+1)
-    fwd_time_arr = np.zeros(max_iter+1)
-    select_time_arr = np.zeros(max_iter+1)
-    eval_time_arr = np.zeros(max_iter+1)
-    comm_time_arr = np.zeros(max_iter+1)
-    lb_arr = np.zeros(max_iter+1, dtype=float)
-    ub_arr = np.zeros(max_iter+1, dtype=float)
-    scenario_arr = np.zeros(settings['max_iter'], dtype=float)
+    total_time_arr = np.zeros(max_iter)
+    fwd_time_arr = np.zeros(max_iter)
+    select_time_arr = np.zeros(max_iter)
+    eval_time_arr = np.zeros(max_iter)
+    comm_time_arr = np.zeros(max_iter)
+    lb_arr = np.zeros(max_iter, dtype=float)
+    ub_arr = np.zeros(max_iter, dtype=float)
+    scenario_arr = np.zeros(max_iter, dtype=float)
     n_iters_ran = max_iter
 
     # first evaluate just to fill the bounds
@@ -298,19 +298,17 @@ def _EDDP(settings, n_procs, q_host, q_child):
     lb_arr[0] = lb
     ub_arr[0] = ub
 
-    print("Total iterations: %d" % (max_iter//T))
-    for n_iters in range(max_iter//T2):
-        lb_arr[n_iters*T2:(n_iters+1)*T2] = lb_arr[n_iters*T2]
-        ub_arr[n_iters*T2:(n_iters+1)*T2] = ub_arr[n_iters*T2]
-        eval_time_arr[n_iters*T2:(n_iters+1)*T2] = eval_time_arr[n_iters*T2]
-
+    print("Total iterations: %d" % (max_iter))
+    for n_iters in range(max_iter):
         # forward phase: solve subproblems
         x_curr = x_0
+        fwd_time_arr[n_iters] = fwd_time_arr[n_iters-1] 
+        select_time_arr[n_iters] = select_time_arr[n_iters-1] 
         for t in range(T):
             s_time = time.time()
             temp = solve_scenarios(prob_solver_arr[t % num_solvers], x_0, x_curr, start_scenario_idx, end_scenario_idx)
             [agg_x, agg_val, agg_grad, agg_ctg] = temp
-            fwd_time_arr[n_iters*T2+t+1] = fwd_time_arr[n_iters*T2+t] + time.time() - s_time
+            fwd_time_arr[n_iters] += time.time() - s_time
 
             s_time = time.time()
             temp = host_forward_get(n_procs, q_host, agg_x, agg_val, agg_grad)
@@ -319,8 +317,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
             x_next = agg_x[0] if t == 0 else temp[0] 
             x_from_fwd[t,:] = x_next
             x_curr = x_next
-            select_time_arr[n_iters*T2+t+1] = select_time_arr[n_iters*T2+t] + time.time() - s_time
-            total_time_arr[n_iters*T2+t+1] = time.time() - s0_time
+            select_time_arr[n_iters] += time.time() - s_time
 
         # backward step
         for t_0, t in enumerate(range(T-1,0,-1)):
@@ -329,19 +326,18 @@ def _EDDP(settings, n_procs, q_host, q_child):
             x_t = x_from_fwd[t]
             if S.get(x_t) <= t:
                 S.update(x_t_prev, min(S.get(x_t_prev), S.get(x_t) - 1))
-            select_time_arr[n_iters*T2+T+t_0+1] = select_time_arr[n_iters*T2+T+t_0] + time.time() - s_time
+            select_time_arr[n_iters] += time.time() - s_time
 
             s_time = time.time()
             temp = solve_scenarios(prob_solver_arr[t % num_solvers], x_0, x_t_prev, start_scenario_idx, end_scenario_idx)
-            fwd_time_arr[n_iters*T2+T+t_0+1] = fwd_time_arr[n_iters*T2+T+t_0] + time.time() - s_time
+            fwd_time_arr[n_iters] += time.time() - s_time
 
             s_time = time.time()
             [agg_x, agg_val, agg_grad, agg_ctg] = temp
             temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, 0, x_0, settings)
             [_, _, _, avg_val, avg_grad] = temp
             prob_solver_arr[(t-1) % num_solvers].add_cut(avg_val, avg_grad, x_t_prev)
-            select_time_arr[n_iters*T2+T+t_0+1] += time.time() - s_time
-            total_time_arr[n_iters*T2+T+t_0+1] = time.time() - s0_time
+            select_time_arr[n_iters] += time.time() - s_time
 
         # evaluate
         # these values are for first stage
@@ -352,15 +348,15 @@ def _EDDP(settings, n_procs, q_host, q_child):
         temp = solve_scenarios(prob_solver_arr[0], x_0, x_0, 0, 1)
         [agg_x, agg_val, agg_grad, agg_ctg] = temp
         lb, ub = evaluate_bounds(agg_x[0], agg_val[0], agg_ctg[0], ub_model, 
-                                 settings['lam'], n_iters*T2+T+t_0-1, 
+                                 settings['lam'], n_iters+1, 
                                  time.time() - s0_time, t==1, max_iter/T**0.25)
-        lb_arr[(n_iters+1)*T2] = lb
-        ub_arr[(n_iters+1)*T2] = ub
-        eval_time_arr[(n_iters+1)*T2] = eval_time_arr[(n_iters+1)*T2-1] + time.time() - s_time
-        total_time_arr[(n_iters+1)*T2] = time.time() - s0_time
+        lb_arr[n_iters] = lb
+        ub_arr[n_iters] = ub
+        eval_time_arr[n_iters] = eval_time_arr[n_iters-1] + time.time() - s_time
+        total_time_arr[n_iters] = time.time() - s0_time
 
-        if total_time_arr[(n_iters+1)*T2] >= settings['time_limit']:
-            n_iters_ran = (n_iters+1)*T2
+        if total_time_arr[n_iters] >= settings['time_limit']:
+            n_iters_ran = n_iters
             break
 
     utils.save_logs(settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr, select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr, scenario_arr) 
@@ -374,7 +370,7 @@ def evaluate_bounds(x_0_sol, val_0, ctg_0, ub_model, lam, k, elpsd_time, print_p
     time_left_msg = ""
     if max_iter > 0:
         avg_time_per_iter = 2*elpsd_time / k**2
-        predicted_last_avg_time_per_iter = max_iter *avg_time_per_iter
+        predicted_last_avg_time_per_iter = max_iter*avg_time_per_iter
         time_left = max_iter*predicted_last_avg_time_per_iter**2
         time_left_msg = "(est tot time: %.1fs)" % time_left
 
