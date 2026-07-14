@@ -266,17 +266,19 @@ class GurobiSolver(GenericSolver):
         x_sol = self.x.X
         y_sol_dummy = np.zeros(self.n)
         # cf: https://support.gurobi.com/hc/en-us/community/posts/7168380823569-How-to-get-a-Dual-variable-for-a-particular-primal-constraint
-        y_sol_dummy = np.array([self.model.getAttr("Pi",
-            [self.model.getConstrByName("dummy[{}]".format(i))])
-            for i in range(self.n)])
+        y_sol_dummy = np.array([
+            self.model.getAttr("Pi", [
+                self.model.getConstrByName("dummy[{}]".format(i))
+            ]) for i in range(self.n)
+        ])
         y_sol = y_sol_dummy
+        grad = y_sol
+
         # y_sol = y_sol_rand
         # y_sol = np.zeros(len(y_sol_dummy))
         # y_sol = y_sol_rand # - y_sol_dummy
         # y_sol = y_sol_dummy
         val = self.model.objVal # getObjective().getValue()
-
-        grad = y_sol 
 
         self.solve_ct += 1
         self.model.update()

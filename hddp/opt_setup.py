@@ -200,6 +200,18 @@ def create_riskadverse_inventory_gurobi_model(N, lam, seed, has_ctg=True):
     model.setObjective(c*u + b*y_neg + h*y_pos + C*tau, gp.GRB.MINIMIZE)
     # https://docs.gurobi.com/projects/optimizer/en/current/reference/attributes/constraintlinear.html#pi
     model.setParam('QCPDual', 1)
+    """
+    Recieved the message from Gurobi
+
+    Warning: failed to compute QCP dual solution due to inaccurate barrier solution
+         Try decreasing BarQCPConvTol for more accuracy
+
+    Note that the default is 1e-06
+    """
+    # model.setParam('BarQCPConvTol', 1e-16) # default 1e-6
+    model.setParam('NumericFocus', 3)
+    model.setParam('TimeLimit', 3600)
+
     model.update()
     M_h = c + b + h
 
