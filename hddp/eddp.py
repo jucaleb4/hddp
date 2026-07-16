@@ -335,7 +335,8 @@ def _EDDP(settings, n_procs, q_host, q_child):
             # in first-stage, should only be one scenario. Always select it
             temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, 0, x_0, settings, here_and_now=(t==0))
             x_next = agg_x[0] if t == 0 else temp[0] 
-            scenario_arr[n_iters] = temp[2]
+            if t == 0:
+                scenario_arr[n_iters] = temp[2]
             x_from_fwd[t,:] = x_next
             x_curr = x_next
             select_time_arr[n_iters] += time.time() - s_time
@@ -380,7 +381,6 @@ def _EDDP(settings, n_procs, q_host, q_child):
             n_iters_ran = n_iters
             break
 
-    import ipdb; ipdb.set_trace()
     utils.save_logs(
         settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr,
         select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr,
