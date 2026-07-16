@@ -264,6 +264,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
     Parallel variant of Lan's EDDP. See `_HDDP_multiproc for more details.
     """
     num_solvers = settings['T']
+    # different of P_SDDP and SDDP is that we use cut sharing
     if settings['mode'] == utils.Mode.P_SDDP:
         num_solvers = 1
     prob_solver_arr, x_0 = get_eddp_problem(settings, num_solvers)
@@ -331,8 +332,10 @@ def _EDDP(settings, n_procs, q_host, q_child):
             s_time = time.time()
             temp = host_forward_get(n_procs, q_host, agg_x, agg_val, agg_grad)
             [agg_x, agg_val, agg_grad] = temp
-            temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, 0, x_0, settings)
+            # in first-stage, should only be one scenario. Always select it
+            temp = get_cut_and_x_next(agg_x, agg_val, agg_grad, S, 0, x_0, settings, here_and_now=(t==0))
             x_next = agg_x[0] if t == 0 else temp[0] 
+            scenario_arr[n_iters] = temp[2]
             x_from_fwd[t,:] = x_next
             x_curr = x_next
             select_time_arr[n_iters] += time.time() - s_time
@@ -377,6 +380,7 @@ def _EDDP(settings, n_procs, q_host, q_child):
             n_iters_ran = n_iters
             break
 
+    import ipdb; ipdb.set_trace()
     utils.save_logs(
         settings['log_folder'], n_iters_ran, total_time_arr, fwd_time_arr,
         select_time_arr, eval_time_arr, comm_time_arr, lb_arr, ub_arr,
@@ -447,7 +451,7 @@ def host_forward_get(n_procs, q_host, agg_x, agg_val, agg_grad):
 
     return [agg_x, agg_val, agg_grad]
 
-def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
+def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings, here_and_now=False):
     """
     Averages the cuts and compute next search point
     :param agg_x:
@@ -457,6 +461,7 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
     :param k: iteration index (for INF-EDDP)
     :param x_0: initial point (for INF-EDDP)
     :param settings: settings
+    :param here_and_now: if we should only consider here and now solution
 
     :return x_next (np.array): next select point
     :return z_next (np.array): most distinguishable point
@@ -493,11 +498,17 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
             z_next = agg_x[i_rand]
         settings['last_reset'] = settings.get('last_reset', 0)+1
     elif settings['mode'] == utils.Mode.EDDP:
-        [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=True)
-        i_select += 1
+        if here_and_now:
+            [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[0:1], settings["rng"], prioritize_zero=True)
+        else:
+            [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[1:], settings["rng"], prioritize_zero=True)
+            i_select += 1
     elif settings['mode'] in [utils.Mode.SDDP, utils.Mode.P_SDDP]:
-        i_select = i_rand = settings["rng"].integers(1, settings["N"], endpoint=True)
-        z_next = agg_x[i_rand]
+        if here_and_now:
+            [z_next, lvl, i_select] = S.largest_sat_lvl(agg_x[0:1], settings["rng"], prioritize_zero=True)
+        else:
+            i_select = i_rand = settings["rng"].integers(1, settings["N"], endpoint=True)
+            z_next = agg_x[i_rand]
     else:
         raise Exception("Unknown mode %d" % settings['mode'])
 
@@ -505,7 +516,8 @@ def get_cut_and_x_next(agg_x, agg_val, agg_grad, S, k, x_0, settings):
 
     # if settings['mode'] in [utils.Mode.INF_EDDP and (k % settings['T'] == 1):
         # x_next = x_0 <- convergence proof did not work for this
-    if settings['mode'] in [utils.Mode.INF_EDDP, utils.Mode.EDDP, utils.Mode.SDDP, utils.Mode.P_SDDP] and (k % settings['T'] == 1):
+    # if settings['mode'] in [utils.Mode.INF_EDDP, utils.Mode.EDDP, utils.Mode.SDDP, utils.Mode.P_SDDP] and (k % settings['T'] == 1):
+    if settings['mode'] in [utils.Mode.INF_EDDP] and (k % settings['T'] == 1):
         x_next = agg_x[0]
     if settings['mode'] in [utils.Mode.CE_INF_EDDP, utils.Mode.GAP_INF_EDDP, utils.Mode.INF_SDDP] and (k % (2*settings['T']) == 1):
         x_next = agg_x[0]
