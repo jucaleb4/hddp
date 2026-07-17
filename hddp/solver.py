@@ -259,8 +259,10 @@ class GurobiSolver(GenericSolver):
         if self.model.status != gp.GRB.OPTIMAL:
             if self.model.status == gp.GRB.SUBOPTIMAL:
                 print("Sub-optimal solution, proceeding anyways...")
+            elif self.model.status == gp.GRB.TIME_LIMIT:
+                print("Reached time limit, proceeding anyways...")
             else:
-                raise Exception("LP did not terminate as optimal. Got code %d" % self.model.status)
+                print("LP did not terminate as optimal. Got code %d. Proceeding anyways..." % self.model.status)
         
 
         # Get solution
