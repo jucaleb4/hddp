@@ -159,7 +159,7 @@ class GurobiSolver(GenericSolver):
         """
         super().__init__(M_h, x_lb_arr, x_ub_arr, 0, 0)
         model.setParam('OutputFlag', 0)
-        model.setParam('TimeLimit', 3600)
+        # model.setParam('TimeLimit', 3600)
         model.update()
         self.model_copy = model.copy()
 
